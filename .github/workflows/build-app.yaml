@@ -41,20 +41,19 @@ jobs:
 
       - name: Normalize app information
         id: normalize
-        env:
-          DESCRIPTION: ${{ steps.info.outputs.description }}
-          IMAGE: ${{ steps.info.outputs.image }}
-          NAME: ${{ steps.info.outputs.name }}
-          URL: ${{ steps.info.outputs.url }}
-          VERSION: ${{ steps.info.outputs.version }}
         run: |
-          echo "image_name=${IMAGE##*/}" >> "$GITHUB_OUTPUT"
-          echo "registry_prefix=${IMAGE%/*}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "description=${DESCRIPTION}" >> "$GITHUB_OUTPUT"
-          if [[ -n "${URL}" && "${URL}" != "null" ]]; then
-            echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          image=${{ steps.info.outputs.image }}
+          echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
+          echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
+          version=${{ steps.info.outputs.version }}
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          name=${{ steps.info.outputs.name }}
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          description=${{ steps.info.outputs.description }}
+          echo "description=${description}" >> "$GITHUB_OUTPUT"
+          url=${{ steps.info.outputs.url }}
+          if [[ -n "$url" && "$url" != "null" ]]; then
+            echo "url=${url}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Prepare build matrix
