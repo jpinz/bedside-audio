@@ -1,6 +1,6 @@
 name: Bedside audio (Voice)
 description: Television audio on Home Assistant Voice Preview Edition
-version: "0.7.0"
+version: "0.8.0"
 slug: bedside_audio
 url: https://github.com/jpinz/bedside-audio
 image: ghcr.io/jpinz/bedside-audio
@@ -16,11 +16,20 @@ options:
   dlna_browse_player_entity_id: ""
   dlna_owner_user_id: ""
   max_volume: 50
+  led_playing_color: "#00FF30"
+  led_playing_brightness: 12
+  led_paused_color: "#FF7000"
+  led_paused_brightness: 18
+  led_sleeping_color: "#6000A0"
+  led_sleeping_brightness: 8
+  led_button_press_color: "#18BBF2"
+  led_button_press_brightness: 10
   playlists: []
   voice_button_event_entity: ""
   voice_assist_satellite_entity: ""
   voice_led_light_entity: ""
   voice_led_select_entity: ""
+  voice_led_theme_text_entity: ""
   voice_volume_cap_number_entity: ""
 schema:
   media_player_entity: str
@@ -28,6 +37,14 @@ schema:
   dlna_browse_player_entity_id: str
   dlna_owner_user_id: str
   max_volume: "int(1,50)"
+  led_playing_color: str
+  led_playing_brightness: "int(1,100)"
+  led_paused_color: str
+  led_paused_brightness: "int(1,100)"
+  led_sleeping_color: str
+  led_sleeping_brightness: "int(1,100)"
+  led_button_press_color: str
+  led_button_press_brightness: "int(1,100)"
   playlists:
     - name: "str(1,64)"
       items: "str(1,8192)"
@@ -35,4 +52,5 @@ schema:
   voice_assist_satellite_entity: str
   voice_led_light_entity: str
   voice_led_select_entity: str
+  voice_led_theme_text_entity: str
   voice_volume_cap_number_entity: str

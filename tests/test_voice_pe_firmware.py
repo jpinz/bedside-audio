@@ -17,7 +17,7 @@ def _source() -> str:
 def test_firmware_is_complete_pinned_16mb_source_without_stock_updater() -> None:
     source = _source()
     assert UPSTREAM_COMMIT in source
-    assert "version: 26.9.0-bedside.4" in source
+    assert "version: 26.9.0-bedside.5" in source
     assert "flash_size: 16MB" in source
     assert "8mb" not in source.lower()
     assert "packages:" not in source
@@ -175,12 +175,58 @@ def test_bedside_leds_are_last_idle_priority_and_define_requested_effects() -> N
     positions = [reducer.index(value) for value in ordered]
     assert positions == sorted(positions)
     assert 'name: "Bedside Playing"' in source
-    assert "const Color green(0, 255, 48);" in source
+    assert "id(bedside_playing_color)" in source
     assert 'name: "Bedside Paused"' in source
-    assert "const Color amber(255, 112, 0);" in source
+    assert "id(bedside_paused_color)" in source
     assert 'name: "Bedside Sleeping"' in source
-    assert "const Color violet(96, 0, 160);" in source
+    assert "id(bedside_sleeping_color)" in source
     assert "num_leds: 12" in source
+
+
+def test_firmware_theme_payload_is_fixed_atomic_persisted_and_fail_closed() -> None:
+    source = _source()
+    assert 'initial_value: \'"v1|#00FF30@012|#FF7000@018|#6000A0@008|#18BBF2@010"\'' in source
+    assert "max_restore_data_length: 50" in source
+    assert 'name: "Bedside LED theme"' in source
+    assert "min_length: 50" in source
+    assert "max_length: 50" in source
+    assert "restore_value: yes" in source
+
+    parser_start = source.index("- id: apply_bedside_led_theme")
+    parser_end = source.index("- id: request_led_refresh", parser_start)
+    parser = source[parser_start:parser_end]
+    assert "payload.size() != 50" in parser
+    assert "brightness < 1 || brightness > 100" in parser
+    assert "Invalid Bedside LED theme payload" in parser
+    validate = parser.index("for (uint8_t style = 0; style < 4; style++)")
+    assign = parser.index("id(bedside_playing_color) = colors[0]")
+    persist = parser.index("id(bedside_led_theme_payload) = payload")
+    assert validate < assign < persist
+
+
+def test_all_configurable_effects_read_theme_and_button_never_reads_led_ring() -> None:
+    source = _source()
+    effect_start = source.index('name: "Center Button Touched"')
+    effect_end = source.index('name: "Twinkle"', effect_start)
+    button_effect = source[effect_start:effect_end]
+    assert "id(bedside_button_press_color)" in button_effect
+    assert "led_ring" not in button_effect
+
+    script_start = source.index("- id: control_leds_center_button_touched")
+    script_end = source.index("- id: control_leds_timer_ringing", script_start)
+    button_script = source[script_start:script_end]
+    assert "id(bedside_button_press_brightness)" in button_script
+    assert "led_ring" not in button_script
+
+    expected = (
+        ("control_leds_bedside_playing", "bedside_playing_brightness"),
+        ("control_leds_bedside_paused", "bedside_paused_brightness"),
+        ("control_leds_bedside_sleeping", "bedside_sleeping_brightness"),
+    )
+    for script_id, brightness_id in expected:
+        start = source.index(f"- id: {script_id}")
+        end = source.index("\n  #", start)
+        assert f"id({brightness_id})" in source[start:end]
 
 
 def test_firmware_tracks_only_placeholders_and_documents_operator_gates() -> None:

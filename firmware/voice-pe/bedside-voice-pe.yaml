@@ -50,10 +50,14 @@ esphome:
   min_version: 2026.6.0
   project:
     name: jpinz.Bedside Voice PE
-    version: 26.9.0-bedside.4
+    version: 26.9.0-bedside.5
   on_boot:
     priority: 375
     then:
+      - script.execute:
+          id: apply_bedside_led_theme
+          payload: !lambda return id(bedside_led_theme_payload);
+      - script.wait: apply_bedside_led_theme
       - media_player.volume_set:
           id: external_media_player
           volume: !lambda |-
@@ -226,6 +230,43 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  - id: bedside_led_theme_payload
+    type: std::string
+    restore_value: yes
+    max_restore_data_length: 50
+    initial_value: '"v1|#00FF30@012|#FF7000@018|#6000A0@008|#18BBF2@010"'
+  - id: bedside_playing_color
+    type: uint32_t
+    restore_value: no
+    initial_value: '0x00FF30'
+  - id: bedside_playing_brightness
+    type: uint8_t
+    restore_value: no
+    initial_value: '12'
+  - id: bedside_paused_color
+    type: uint32_t
+    restore_value: no
+    initial_value: '0xFF7000'
+  - id: bedside_paused_brightness
+    type: uint8_t
+    restore_value: no
+    initial_value: '18'
+  - id: bedside_sleeping_color
+    type: uint32_t
+    restore_value: no
+    initial_value: '0x6000A0'
+  - id: bedside_sleeping_brightness
+    type: uint8_t
+    restore_value: no
+    initial_value: '8'
+  - id: bedside_button_press_color
+    type: uint32_t
+    restore_value: no
+    initial_value: '0x18BBF2'
+  - id: bedside_button_press_brightness
+    type: uint8_t
+    restore_value: no
+    initial_value: '10'
 
 switch:
   # This is the master mute switch. It is exposed to Home Assistant. The user can only turn it on and off if the hardware switch is off. (The hardware switch overrides the software one)
@@ -823,18 +864,12 @@ light:
           name: "Center Button Touched"
           update_interval: 16ms
           lambda: |-
-            if (initial_run) {
-              // set voice_assistant_leds light to colors based on led_ring
-              auto led_ring_cv = id(led_ring).current_values;
-              auto va_leds_call = id(voice_assistant_leds).make_call();
-              va_leds_call.from_light_color_values(led_ring_cv);
-              va_leds_call.set_brightness( min ( max( id(led_ring).current_values.get_brightness() , 0.2f ) + 0.1f , 1.0f ) );
-              va_leds_call.set_state(true);
-              va_leds_call.perform();
-            }
-            auto light_color = id(voice_assistant_leds).current_values;
-            Color color(light_color.get_red() * 255, light_color.get_green() * 255,
-                  light_color.get_blue() * 255);
+            const uint32_t rgb = id(bedside_button_press_color);
+            const Color color(
+              (rgb >> 16) & 0xFF,
+              (rgb >> 8) & 0xFF,
+              rgb & 0xFF
+            );
             for (uint8_t i = 0; i < 12; i++) {
               it[i] = color;
             }
@@ -1011,14 +1046,19 @@ light:
             if (initial_run) {
               id(global_led_animation_index) = 0;
             }
-            const Color green(0, 255, 48);
+            const uint32_t rgb = id(bedside_playing_color);
+            const Color color(
+              (rgb >> 16) & 0xFF,
+              (rgb >> 8) & 0xFF,
+              rgb & 0xFF
+            );
             for (uint8_t i = 0; i < 12; i++) {
               if (i == id(global_led_animation_index) % 12) {
-                it[i] = green;
+                it[i] = color;
               } else if (i == (id(global_led_animation_index) + 11) % 12) {
-                it[i] = green * 96;
+                it[i] = color * 96;
               } else if (i == (id(global_led_animation_index) + 10) % 12) {
-                it[i] = green * 32;
+                it[i] = color * 32;
               } else {
                 it[i] = Color::BLACK;
               }
@@ -1028,9 +1068,14 @@ light:
           name: "Bedside Paused"
           update_interval: 1s
           lambda: |-
-            const Color amber(255, 112, 0);
+            const uint32_t rgb = id(bedside_paused_color);
+            const Color color(
+              (rgb >> 16) & 0xFF,
+              (rgb >> 8) & 0xFF,
+              rgb & 0xFF
+            );
             for (uint8_t i = 0; i < 12; i++) {
-              it[i] = (i % 3 == 0) ? amber : Color::BLACK;
+              it[i] = (i % 3 == 0) ? color : Color::BLACK;
             }
       - addressable_lambda:
           name: "Bedside Sleeping"
@@ -1042,9 +1087,14 @@ light:
               level = 24;
               rising = true;
             }
-            const Color violet(96, 0, 160);
+            const uint32_t rgb = id(bedside_sleeping_color);
+            const Color color(
+              (rgb >> 16) & 0xFF,
+              (rgb >> 8) & 0xFF,
+              rgb & 0xFF
+            );
             for (uint8_t i = 0; i < 12; i++) {
-              it[i] = violet * level;
+              it[i] = color * level;
             }
             if (rising) {
               level += 2;
@@ -1153,6 +1203,93 @@ event:
       - easter_egg_press
 
 script:
+  - id: apply_bedside_led_theme
+    mode: restart
+    parameters:
+      payload: string
+    then:
+      - lambda: |-
+          static const std::string default_payload =
+            "v1|#00FF30@012|#FF7000@018|#6000A0@008|#18BBF2@010";
+          bool valid = true;
+          if (payload.size() != 50 || payload.compare(0, 3, "v1|") != 0) {
+            valid = false;
+          }
+          uint32_t colors[4] = {};
+          uint8_t brightnesses[4] = {};
+          auto hex_value = [](char value) -> int {
+            if (value >= '0' && value <= '9') {
+              return value - '0';
+            }
+            if (value >= 'A' && value <= 'F') {
+              return value - 'A' + 10;
+            }
+            return -1;
+          };
+          if (valid) {
+            for (uint8_t style = 0; style < 4; style++) {
+              const size_t offset = 3 + style * 12;
+              if (
+                payload[offset] != '#'
+                || payload[offset + 7] != '@'
+                || (style < 3 && payload[offset + 11] != '|')
+              ) {
+                valid = false;
+                break;
+              }
+              uint32_t color = 0;
+              for (uint8_t digit = 0; digit < 6; digit++) {
+                const int value = hex_value(payload[offset + 1 + digit]);
+                if (value < 0) {
+                  valid = false;
+                  break;
+                }
+                color = (color << 4) | static_cast<uint32_t>(value);
+              }
+              if (!valid) {
+                break;
+              }
+              const char hundreds = payload[offset + 8];
+              const char tens = payload[offset + 9];
+              const char ones = payload[offset + 10];
+              if (
+                hundreds < '0' || hundreds > '9'
+                || tens < '0' || tens > '9'
+                || ones < '0' || ones > '9'
+              ) {
+                valid = false;
+                break;
+              }
+              const int brightness =
+                (hundreds - '0') * 100 + (tens - '0') * 10 + (ones - '0');
+              if (brightness < 1 || brightness > 100) {
+                valid = false;
+                break;
+              }
+              colors[style] = color;
+              brightnesses[style] = static_cast<uint8_t>(brightness);
+            }
+          }
+          if (!valid) {
+            ESP_LOGW("bedside_led_theme", "Invalid Bedside LED theme payload");
+            if (payload == id(bedside_led_theme_payload)) {
+              id(bedside_led_theme_payload) = default_payload;
+              id(bedside_led_theme).publish_state(default_payload);
+            }
+            return;
+          }
+          id(bedside_playing_color) = colors[0];
+          id(bedside_playing_brightness) = brightnesses[0];
+          id(bedside_paused_color) = colors[1];
+          id(bedside_paused_brightness) = brightnesses[1];
+          id(bedside_sleeping_color) = colors[2];
+          id(bedside_sleeping_brightness) = brightnesses[2];
+          id(bedside_button_press_color) = colors[3];
+          id(bedside_button_press_brightness) = brightnesses[3];
+          id(bedside_led_theme_payload) = payload;
+          id(bedside_led_theme).publish_state(payload);
+          id(request_led_refresh).execute();
+
   - id: request_led_refresh
     mode: restart
     then:
@@ -1293,21 +1430,21 @@ script:
   - id: control_leds_bedside_playing
     then:
       - light.turn_on:
-          brightness: 12%
+          brightness: !lambda return id(bedside_playing_brightness) / 100.0f;
           id: voice_assistant_leds
           effect: "Bedside Playing"
 
   - id: control_leds_bedside_paused
     then:
       - light.turn_on:
-          brightness: 18%
+          brightness: !lambda return id(bedside_paused_brightness) / 100.0f;
           id: voice_assistant_leds
           effect: "Bedside Paused"
 
   - id: control_leds_bedside_sleeping
     then:
       - light.turn_on:
-          brightness: 8%
+          brightness: !lambda return id(bedside_sleeping_brightness) / 100.0f;
           id: voice_assistant_leds
           effect: "Bedside Sleeping"
 
@@ -1411,7 +1548,7 @@ script:
   - id: control_leds_center_button_touched
     then:
       - light.turn_on:
-          brightness: !lambda return min ( max( id(led_ring).current_values.get_brightness() , 0.2f ) + 0.1f , 1.0f );
+          brightness: !lambda return id(bedside_button_press_brightness) / 100.0f;
           id: voice_assistant_leds
           effect: "Center Button Touched"
 
@@ -1925,6 +2062,22 @@ number:
                 id: external_media_player
                 volume: !lambda return x;
       - script.execute: request_led_refresh
+
+text:
+  - platform: template
+    name: "Bedside LED theme"
+    id: bedside_led_theme
+    icon: mdi:palette
+    entity_category: config
+    mode: text
+    min_length: 50
+    max_length: 50
+    update_interval: 1s
+    lambda: return id(bedside_led_theme_payload);
+    set_action:
+      - script.execute:
+          id: apply_bedside_led_theme
+          payload: !lambda return x;
 
 select:
   - platform: template

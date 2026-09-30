@@ -10,10 +10,12 @@ MAX_PLAYLIST_ITEMS = 64
 MAX_PLAYLIST_PATH_SEGMENTS = 16
 MAX_PLAYLIST_NAME_LENGTH = 64
 MAX_PLAYLIST_ITEM_TEXT_LENGTH = 8192
+LED_THEME_PAYLOAD_LENGTH = 50
 _UNSAFE_PLAYLIST_SEGMENT = re.compile(
     r"(?:^[\\/]|^[A-Za-z]:[\\/]|[A-Za-z][A-Za-z0-9+.-]*://|media-source:)",
     re.IGNORECASE,
 )
+_LED_COLOR = re.compile(r"#[0-9A-F]{6}")
 
 
 def _valid_label(value: object, *, maximum: int) -> bool:
@@ -78,7 +80,9 @@ class HardwareBridgeSettings:
     assist_satellite_entity: str = ""
     led_light_entity: str = ""
     led_select_entity: str = ""
+    led_theme_text_entity: str = ""
     volume_cap_number_entity: str = ""
+    led_theme: LedTheme = field(default_factory=lambda: LedTheme())
 
     @property
     def disabled_reason(self) -> str | None:
@@ -87,6 +91,7 @@ class HardwareBridgeSettings:
             self.assist_satellite_entity,
             self.led_light_entity,
             self.led_select_entity,
+            self.led_theme_text_entity,
             self.volume_cap_number_entity,
         )
         if not any(values):
@@ -110,6 +115,12 @@ class HardwareBridgeSettings:
             r"select\.[a-z0-9_]+", self.led_select_entity,
         ):
             return "Voice LED select entity is invalid"
+        if self.led_theme_text_entity and not re.fullmatch(
+            r"text\.[a-z0-9_]+", self.led_theme_text_entity,
+        ):
+            return "Voice LED theme text entity is invalid"
+        if self.led_theme_text_entity and not self.led_select_entity:
+            return "Voice LED theme text entity requires the custom LED select entity"
         if self.volume_cap_number_entity and not re.fullmatch(
             r"number\.[a-z0-9_]+", self.volume_cap_number_entity,
         ):
@@ -123,6 +134,53 @@ class HardwareBridgeSettings:
     @property
     def led_entity(self) -> str:
         return self.led_light_entity or self.led_select_entity
+
+
+@dataclass(frozen=True, slots=True)
+class LedStyle:
+    color: str
+    brightness: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.color, str) or not _LED_COLOR.fullmatch(self.color):
+            raise ValueError("LED colors must use canonical #RRGGBB")
+        if (
+            type(self.brightness) is not int
+            or not 1 <= self.brightness <= 100
+        ):
+            raise ValueError("LED brightness must be an integer from 1 to 100")
+
+    @property
+    def payload(self) -> str:
+        return f"{self.color}@{self.brightness:03d}"
+
+
+@dataclass(frozen=True, slots=True)
+class LedTheme:
+    playing: LedStyle = field(
+        default_factory=lambda: LedStyle("#00FF30", 12),
+    )
+    paused: LedStyle = field(
+        default_factory=lambda: LedStyle("#FF7000", 18),
+    )
+    sleeping: LedStyle = field(
+        default_factory=lambda: LedStyle("#6000A0", 8),
+    )
+    button_press: LedStyle = field(
+        default_factory=lambda: LedStyle("#18BBF2", 10),
+    )
+
+    @property
+    def payload(self) -> str:
+        payload = "v1|" + "|".join((
+            self.playing.payload,
+            self.paused.payload,
+            self.sleeping.payload,
+            self.button_press.payload,
+        ))
+        if len(payload) != LED_THEME_PAYLOAD_LENGTH:
+            raise ValueError("LED theme payload length is invalid")
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

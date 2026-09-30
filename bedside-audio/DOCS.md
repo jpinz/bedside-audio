@@ -89,12 +89,39 @@ responses to avoid running stale JavaScript through Ingress.
 | `dlna_browse_player_entity_id` | Exact video-capable HA media player used for read-only browsing, for example `media_player.example_tv`; it must differ from the Voice player. |
 | `dlna_owner_user_id` | Trusted HA Ingress user ID, required on a fresh install. On an upgrade it may be blank only when a valid legacy owner record supplies the same HA user ID. |
 | `max_volume` | Voice cap from 1 to 50 percent; default is 50. Startup and saved volume remain at their existing value (15 on a fresh install) unless that value exceeds the configured cap. Do not raise Voice volume for a test. |
+| `led_playing_color` | Custom-firmware playing color in canonical `#RRGGBB`; default `#00FF30`. |
+| `led_playing_brightness` | Playing brightness from 1 to 100 percent; default `12`. |
+| `led_paused_color` | Custom-firmware paused color in canonical `#RRGGBB`; default `#FF7000`. |
+| `led_paused_brightness` | Paused brightness from 1 to 100 percent; default `18`. |
+| `led_sleeping_color` | Custom-firmware sleeping color in canonical `#RRGGBB`; default `#6000A0`. |
+| `led_sleeping_brightness` | Sleeping brightness from 1 to 100 percent; default `8`. |
+| `led_button_press_color` | Shared physical center-button flash color in canonical `#RRGGBB`; default `#18BBF2`. |
+| `led_button_press_brightness` | Shared physical center-button flash brightness from 1 to 100 percent; default `10`. This applies only while the button is held. |
 | `playlists` | Optional list of configured playlists. Each record has a unique `name` and a multiline `items` string as documented below. The default empty list preserves the previous interface and behavior. |
 | `voice_button_event_entity` | Optional exact Voice PE `event.*` entity. Leave blank unless the complete hardware bridge is configured. |
 | `voice_assist_satellite_entity` | Optional exact Voice PE `assist_satellite.*` entity used to defer controls and preserve local Assist, mute and error display priority. |
 | `voice_led_light_entity` | Optional exact stock uniform `light.*` LED entity. Configure this or the custom select, never both. |
 | `voice_led_select_entity` | Optional exact custom-firmware `select.*` LED entity with the fixed options `off`, `playing`, `paused` and `sleeping`. |
+| `voice_led_theme_text_entity` | Optional exact custom-firmware `text.*` entity for `Bedside LED theme`. It requires the custom select entity. Leave blank until firmware `26.9.0-bedside.5` is installed and Home Assistant exposes the entity. |
 | `voice_volume_cap_number_entity` | Optional exact custom-firmware `number.*` entity for `Bedside volume cap`; range `0.0` to `0.50`, step `0.05`, initial `0.50`, restore disabled. |
+
+The generated Home Assistant configuration UI exposes the color options as
+plain text fields and brightness as bounded integer fields. The App rejects
+lowercase, shorthand, missing-`#`, non-hex, or out-of-range values at startup
+with the exact option name in the error. The LED option block is:
+
+```yaml
+led_playing_color: "#00FF30"
+led_playing_brightness: 12
+led_paused_color: "#FF7000"
+led_paused_brightness: 18
+led_sleeping_color: "#6000A0"
+led_sleeping_brightness: 8
+led_button_press_color: "#18BBF2"
+led_button_press_brightness: 10
+voice_led_select_entity: select.bedside_voice_pe_bedside_display_intent
+voice_led_theme_text_entity: text.bedside_voice_pe_bedside_led_theme
+```
 
 ### Custom playlist options
 
@@ -135,23 +162,34 @@ folder line repeats its queue items. If a title was renamed, removed,
 duplicated, truncated by Core or became unplayable, playback fails visibly
 without starting a partial queue.
 
-The five hardware options are disabled by default. Existing v0.5 installs can
+The six hardware entity options are disabled by default. Existing installs can
 update without activating hardware controls. The bridge starts only when the
 button and Assist entities plus exactly one LED output are valid; missing,
 partial or malformed settings leave the Ingress remote available and report a
 disabled bridge status in `/api/state`. The volume-cap number is optional; a
 malformed configured number entity disables the bridge, while a blank value
-preserves stock-firmware compatibility.
+preserves stock-firmware compatibility. The theme text entity is also
+optional for compatibility, but when configured it must be an exact `text.*`
+entity used with the custom select output.
 
 When enabled, the App authenticates to
 `ws://supervisor/core/websocket` with `SUPERVISOR_TOKEN`, subscribes to state
-triggers for only the configured Voice media player, button, Assist and LED
-entities, and adds one event trigger filtered to Core
+triggers for only the configured Voice media player, button, Assist, LED,
+theme, and volume-cap entities, and adds one event trigger filtered to Core
 `call_service`/`media_player.play_media` events. It resolves the token's HA
 user through `auth/current_user`, then locally accepts only calls targeting
 the exact configured Voice entity. Snapshots after startup or reconnect may
 restore availability, volume and LED display, but never replay button events,
 service calls or transport actions. Live event tuples are deduplicated.
+
+The App serializes all four styles into one fixed 50-character payload:
+`v1|#RRGGBB@PPP|#RRGGBB@PPP|#RRGGBB@PPP|#RRGGBB@PPP`, ordered as playing,
+paused, sleeping, and button press. `PPP` is a zero-padded integer percentage.
+The bridge validates the text entity's exact 50-character contract and uses
+only `text.set_value` for the configured entity and configured payload. It
+sends on startup or reconnect when the reported value differs, suppresses
+duplicate stale echoes, and retries a later mismatch. A theme write failure is
+logged and isolated from transport, volume, gesture, and display processing.
 
 The validated custom firmware event is named `Button press` and may report
 `single_press`, `double_press`, `triple_press`, `long_press` or
@@ -200,10 +238,31 @@ authoritative for external volume correction.
 The LED reducer uses `playing`, `paused` and `sleeping`; stopped or idle means
 `sleeping`, including while a sleep timer is active. `off` is reserved for
 startup or unavailable output. The stock light receives a best-effort uniform
-color/brightness representation, while custom firmware receives only the
-fixed select options. Bedside never addresses individual pixels and does not
-override local Assist, mute or error indications; it reapplies its display
-only after Assist returns idle.
+color/brightness representation. Custom firmware receives the fixed select
+intent plus the optional atomic theme payload. Bedside never addresses
+individual pixels and does not override local Assist, mute or error
+indications; it reapplies its display only after Assist returns idle. The
+button style is one shared press indication, not separate single, double, or
+triple feedback.
+
+### Firmware and App upgrade order for LED themes
+
+1. Update the App to `0.8.0` with `voice_led_theme_text_entity` left blank.
+   Existing custom firmware continues using its built-in playing, paused, and
+   sleeping appearance.
+2. Separately review and install firmware `26.9.0-bedside.5`. Firmware
+   installation or flashing is never performed by the App.
+3. Confirm Home Assistant exposes `Bedside LED theme` and record its exact
+   `text.*` entity ID. The device keeps its MAC suffix, so do not copy an
+   example ID without checking.
+4. Set `voice_led_theme_text_entity` to that exact ID, review the eight style
+   options, and restart the App. The next startup snapshot synchronizes the
+   configured payload.
+
+Installing firmware first is also compatible because older App versions ignore
+the new text entity. Do not configure the theme entity against older firmware:
+the firmware cannot report or apply the payload, and a malformed entity option
+deliberately disables the bridge.
 
 The app is Ingress-only, publishes no host or media ports, requires no
 filesystem mount and keeps the HA owner in `/data/bedside-audio/owner.json`
