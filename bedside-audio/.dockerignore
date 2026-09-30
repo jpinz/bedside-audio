@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!pyproject.toml
+!DOCS.md
+!bedside_audio/
+!bedside_audio/*.py
+!bedside_audio/static/
+!bedside_audio/static/*.html
+!bedside_audio/static/*.js
+!bedside_audio/static/*.css

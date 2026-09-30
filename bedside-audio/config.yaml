@@ -1,0 +1,38 @@
+name: Bedside audio (Voice)
+description: Television audio on Home Assistant Voice Preview Edition
+version: "0.7.0"
+slug: bedside_audio
+url: https://github.com/jpinz/bedside-audio
+image: ghcr.io/jpinz/bedside-audio
+arch:
+  - aarch64
+  - amd64
+stage: experimental
+ingress: true
+homeassistant_api: true
+options:
+  media_player_entity: null
+  dlna_source_id: ""
+  dlna_browse_player_entity_id: ""
+  dlna_owner_user_id: ""
+  max_volume: 50
+  playlists: []
+  voice_button_event_entity: ""
+  voice_assist_satellite_entity: ""
+  voice_led_light_entity: ""
+  voice_led_select_entity: ""
+  voice_volume_cap_number_entity: ""
+schema:
+  media_player_entity: str
+  dlna_source_id: str
+  dlna_browse_player_entity_id: str
+  dlna_owner_user_id: str
+  max_volume: "int(1,50)"
+  playlists:
+    - name: "str(1,64)"
+      items: "str(1,8192)"
+  voice_button_event_entity: str
+  voice_assist_satellite_entity: str
+  voice_led_light_entity: str
+  voice_led_select_entity: str
+  voice_volume_cap_number_entity: str
