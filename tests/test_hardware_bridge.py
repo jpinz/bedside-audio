@@ -29,7 +29,9 @@ _BUTTON = "event.bedroom_voice_button"
 _ASSIST = "assist_satellite.bedroom_voice"
 _LIGHT = "light.bedroom_voice_ring"
 _SELECT = "select.bedroom_voice_ring_mode"
+_THEME = "text.bedroom_voice_led_theme"
 _NUMBER = "number.bedroom_voice_volume_cap"
+_THEME_PAYLOAD = "v1|#00FF30@012|#FF7000@018|#6000A0@008|#18BBF2@010"
 
 
 def _run(coro):
@@ -37,13 +39,14 @@ def _run(coro):
 
 
 def _settings(
-    *, custom: bool = False, cap_number: bool = False,
+    *, custom: bool = False, cap_number: bool = False, theme: bool = False,
 ) -> HardwareBridgeSettings:
     return HardwareBridgeSettings(
         button_event_entity=_BUTTON,
         assist_satellite_entity=_ASSIST,
         led_select_entity=_SELECT if custom else "",
         led_light_entity="" if custom else _LIGHT,
+        led_theme_text_entity=_THEME if theme else "",
         volume_cap_number_entity=_NUMBER if cap_number else "",
     )
 
@@ -146,6 +149,9 @@ class FakeRest:
 
     async def set_number(self, entity_id: str, value: float) -> None:
         self.calls.append(("number", entity_id, value))
+
+    async def set_text(self, entity_id: str, value: str) -> None:
+        self.calls.append(("text", entity_id, value))
 
     async def close(self) -> None:
         return None
@@ -728,6 +734,104 @@ def test_configured_firmware_volume_cap_number_syncs_idempotently() -> None:
     assert rest.calls == [("number", _NUMBER, 0.4)]
 
 
+def test_configured_firmware_theme_syncs_snapshot_mismatch_and_deduplicates_echoes() -> None:
+    rest = FakeRest()
+    processor = HardwareIntentProcessor(
+        _settings(custom=True, theme=True), _VOICE, FakeController(), rest,
+    )
+    assert processor.entities == (_VOICE, _BUTTON, _ASSIST, _SELECT, _THEME)
+
+    async def exercise() -> None:
+        await processor.process_state(
+            _THEME,
+            "v1|#FFFFFF@100|#FFFFFF@100|#FFFFFF@100|#FFFFFF@100",
+            {"min": 50, "max": 50, "mode": "text"},
+            live=False,
+            event_key="theme-snapshot",
+        )
+        await processor.process_state(
+            _THEME,
+            "v1|#FFFFFF@100|#FFFFFF@100|#FFFFFF@100|#FFFFFF@100",
+            {"min": 50, "max": 50, "mode": "text"},
+            live=True,
+            event_key="theme-stale-echo",
+        )
+        await processor.process_state(
+            _THEME,
+            _THEME_PAYLOAD,
+            {"min": 50, "max": 50, "mode": "text"},
+            live=True,
+            event_key="theme-valid-echo",
+        )
+        await processor.process_state(
+            _THEME,
+            "v1|#FFFFFF@100|#FFFFFF@100|#FFFFFF@100|#FFFFFF@100",
+            {"min": 50, "max": 50, "mode": "text"},
+            live=True,
+            event_key="theme-later-mismatch",
+        )
+
+    _run(exercise())
+    assert rest.calls == [
+        ("text", _THEME, _THEME_PAYLOAD),
+        ("text", _THEME, _THEME_PAYLOAD),
+    ]
+
+
+def test_theme_sync_retries_on_reconnect_and_isolates_rest_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailingThemeRest(FakeRest):
+        failures = 1
+
+        async def set_text(self, entity_id: str, value: str) -> None:
+            self.calls.append(("text", entity_id, value))
+            if self.failures:
+                self.failures -= 1
+                raise OSError("theme write failed")
+
+    rest = FailingThemeRest()
+    processor = HardwareIntentProcessor(
+        _settings(custom=True, theme=True), _VOICE, FakeController(), rest,
+    )
+    snapshot = [{
+        "entity_id": _THEME,
+        "state": "unknown",
+        "attributes": {"min": 50, "max": 50, "mode": "text"},
+        "last_updated": "theme-snapshot",
+    }]
+
+    async def exercise() -> None:
+        await processor.reconcile_snapshot(snapshot)
+        await processor.reconcile_snapshot(snapshot)
+
+    with caplog.at_level(logging.WARNING):
+        _run(exercise())
+    assert rest.calls == [
+        ("text", _THEME, _THEME_PAYLOAD),
+        ("text", _THEME, _THEME_PAYLOAD),
+    ]
+    assert "theme write failed" in caplog.text
+
+
+def test_theme_entity_contract_must_match_fixed_payload_shape() -> None:
+    processor = HardwareIntentProcessor(
+        _settings(custom=True, theme=True), _VOICE, FakeController(), FakeRest(),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(ValueError, match="theme text contract"):
+            await processor.process_state(
+                _THEME,
+                "unknown",
+                {"min": 0, "max": 255, "mode": "text"},
+                live=False,
+                event_key="bad-contract",
+            )
+
+    _run(exercise())
+
+
 def test_core_rest_actions_are_tightly_limited_to_configured_entities_and_services() -> None:
     session = RestSession()
     actions = CoreRestActions(
@@ -735,6 +839,8 @@ def test_core_rest_actions_are_tightly_limited_to_configured_entities_and_servic
         voice_entity=_VOICE,
         light_entity=_LIGHT,
         select_entity=_SELECT,
+        text_entity=_THEME,
+        theme_payload=_THEME_PAYLOAD,
         number_entity=_NUMBER,
         session=session,
     )
@@ -743,11 +849,14 @@ def test_core_rest_actions_are_tightly_limited_to_configured_entities_and_servic
         await actions.correct_volume(_VOICE, 0.5)
         await actions.set_light(_LIGHT, "sleeping")
         await actions.set_select(_SELECT, "paused")
+        await actions.set_text(_THEME, _THEME_PAYLOAD)
         await actions.set_number(_NUMBER, 0.4)
         with pytest.raises(ValueError, match="not allowlisted"):
             await actions.correct_volume("media_player.other", 0.5)
         with pytest.raises(ValueError, match="not allowlisted"):
             await actions.set_select(_SELECT, "error")
+        with pytest.raises(ValueError, match="not allowlisted"):
+            await actions.set_text("text.other", _THEME_PAYLOAD)
 
     _run(exercise())
     assert session.trust_env is False
@@ -770,6 +879,10 @@ def test_core_rest_actions_are_tightly_limited_to_configured_entities_and_servic
         (
             "http://supervisor/core/api/services/select/select_option",
             {"entity_id": _SELECT, "option": "paused"},
+        ),
+        (
+            "http://supervisor/core/api/services/text/set_value",
+            {"entity_id": _THEME, "value": _THEME_PAYLOAD},
         ),
         (
             "http://supervisor/core/api/services/number/set_value",

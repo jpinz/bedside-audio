@@ -9,6 +9,18 @@ import pytest
 from bedside_audio.ha_addon import settings_from_options
 
 
+DEFAULT_LED_OPTIONS = {
+    "led_playing_color": "#00FF30",
+    "led_playing_brightness": 12,
+    "led_paused_color": "#FF7000",
+    "led_paused_brightness": 18,
+    "led_sleeping_color": "#6000A0",
+    "led_sleeping_brightness": 8,
+    "led_button_press_color": "#18BBF2",
+    "led_button_press_brightness": 10,
+}
+
+
 def _settings(tmp_path: Path, **overrides: object):
     values: dict[str, object] = {
         "media_player_entity": "media_player.bedroom_voice",
@@ -34,6 +46,9 @@ def test_dlna_only_options_accept_pruned_and_legacy_supervisor_shapes(
     assert clean.dlna.browse_player_entity_id == "media_player.example_tv"
     assert clean.dlna.owner_user_id is None
     assert clean.hardware.enabled is False
+    assert clean.hardware.led_theme.payload == (
+        "v1|#00FF30@012|#FF7000@018|#6000A0@008|#18BBF2@010"
+    )
     assert clean.state_dir == Path("/data/bedside-audio")
 
     legacy = _settings(
@@ -103,6 +118,44 @@ def test_dlna_only_options_fail_closed(
 
 
 @pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"led_playing_color": "00FF30"}, "led_playing_color"),
+        ({"led_paused_color": "#ff7000"}, "led_paused_color"),
+        ({"led_sleeping_color": "#6000AG"}, "led_sleeping_color"),
+        ({"led_button_press_color": 123}, "led_button_press_color"),
+        ({"led_playing_brightness": 0}, "led_playing_brightness"),
+        ({"led_paused_brightness": 101}, "led_paused_brightness"),
+        ({"led_sleeping_brightness": True}, "led_sleeping_brightness"),
+        ({"led_button_press_brightness": "10"}, "led_button_press_brightness"),
+    ],
+)
+def test_led_theme_options_fail_closed_with_actionable_errors(
+    tmp_path: Path, overrides: dict[str, object], message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _settings(tmp_path, **overrides)
+
+
+def test_led_theme_options_build_canonical_fixed_payload(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        led_playing_color="#112233",
+        led_playing_brightness=1,
+        led_paused_color="#AABBCC",
+        led_paused_brightness=25,
+        led_sleeping_color="#000000",
+        led_sleeping_brightness=99,
+        led_button_press_color="#FFFFFF",
+        led_button_press_brightness=100,
+    )
+
+    assert settings.hardware.led_theme.payload == (
+        "v1|#112233@001|#AABBCC@025|#000000@099|#FFFFFF@100"
+    )
+
+
+@pytest.mark.parametrize(
     ("playlists", "message"),
     [
         ({}, "playlists must be a list"),
@@ -166,10 +219,10 @@ def test_manifest_does_not_expose_inert_plex_options() -> None:
     assert "ha_http_link_origin:" not in manifest
     assert "max_volume: 50" in manifest
     assert "max_volume: \"int(1,50)\"" in manifest
-    assert 'version: "0.7.0"' in manifest
+    assert 'version: "0.8.0"' in manifest
     assert "image: ghcr.io/jpinz/bedside-audio" in manifest
-    assert 'io.hass.version="0.7.0"' in dockerfile
-    assert pyproject["project"]["version"] == "0.7.0"
+    assert 'io.hass.version="0.8.0"' in dockerfile
+    assert pyproject["project"]["version"] == "0.8.0"
     assert "playlists: []" in manifest
     assert 'name: "str(1,64)"' in manifest
     assert 'items: "str(1,8192)"' in manifest
@@ -177,7 +230,18 @@ def test_manifest_does_not_expose_inert_plex_options() -> None:
     assert 'voice_assist_satellite_entity: ""' in manifest
     assert 'voice_led_light_entity: ""' in manifest
     assert 'voice_led_select_entity: ""' in manifest
+    assert 'voice_led_theme_text_entity: ""' in manifest
     assert 'voice_volume_cap_number_entity: ""' in manifest
+    for name, value in DEFAULT_LED_OPTIONS.items():
+        rendered = f'{name}: "{value}"' if isinstance(value, str) else f"{name}: {value}"
+        assert rendered in manifest
+    for name in (
+        "led_playing_brightness",
+        "led_paused_brightness",
+        "led_sleeping_brightness",
+        "led_button_press_brightness",
+    ):
+        assert f'{name}: "int(1,100)"' in manifest
 
 
 def test_official_app_repository_layout_is_installable() -> None:
@@ -209,6 +273,7 @@ def test_hardware_options_require_exact_complete_entities_or_disable_fail_closed
         voice_assist_satellite_entity="assist_satellite.bedroom_voice",
         voice_led_light_entity="light.bedroom_voice_ring",
         voice_led_select_entity="",
+        voice_led_theme_text_entity="",
         voice_volume_cap_number_entity="number.bedroom_voice_volume_cap",
     )
     assert enabled.hardware.enabled is True
@@ -236,10 +301,34 @@ def test_hardware_options_require_exact_complete_entities_or_disable_fail_closed
             "voice_led_light_entity": "light.bedroom_voice_ring",
             "voice_volume_cap_number_entity": "number.bad/name",
         },
+        {
+            "voice_button_event_entity": "event.bedroom_voice_button",
+            "voice_assist_satellite_entity": "assist_satellite.bedroom_voice",
+            "voice_led_light_entity": "light.bedroom_voice_ring",
+            "voice_led_theme_text_entity": "text.bedroom_voice_led_theme",
+        },
+        {
+            "voice_button_event_entity": "event.bedroom_voice_button",
+            "voice_assist_satellite_entity": "assist_satellite.bedroom_voice",
+            "voice_led_select_entity": "select.bedroom_voice_ring_mode",
+            "voice_led_theme_text_entity": "text.bad/name",
+        },
     ):
         disabled = _settings(tmp_path, **overrides)
         assert disabled.hardware.enabled is False
         assert disabled.hardware.disabled_reason
+
+    themed = _settings(
+        tmp_path,
+        voice_button_event_entity="event.bedroom_voice_button",
+        voice_assist_satellite_entity="assist_satellite.bedroom_voice",
+        voice_led_light_entity="",
+        voice_led_select_entity="select.bedroom_voice_ring_mode",
+        voice_led_theme_text_entity="text.bedroom_voice_led_theme",
+        voice_volume_cap_number_entity="number.bedroom_voice_volume_cap",
+    )
+    assert themed.hardware.enabled is True
+    assert themed.hardware.led_theme_text_entity == "text.bedroom_voice_led_theme"
 
 
 def test_runtime_dependencies_do_not_install_plex_credentials_stack() -> None:
