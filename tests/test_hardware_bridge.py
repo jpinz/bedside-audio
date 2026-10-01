@@ -519,7 +519,7 @@ def test_playlist_queue_keeps_gesture_provenance_generation_and_timer_policy(
     assert state["transport_generation"] == first_generation + 2
     assert state["owns_transport"] is False
     assert state["timer_remaining"] == pytest.approx(30 * 60 - 11)
-    assert state["capabilities"]["auto_advance"] is False
+    assert state["capabilities"]["auto_advance"] is True
     assert [media.name for media in player.loads] == [
         "Episode 2",
         "Episode 0",
@@ -1223,7 +1223,42 @@ def test_reconnect_is_bounded_and_shutdown_closes_without_crashing_controller() 
     assert controller.calls == [("volume", 20), ("skip", "next")]
 
 
-def test_controller_failure_reconnects_sets_terminal_status_and_close_is_safe() -> None:
+def test_reconnect_recovers_after_outage_exceeds_backoff_budget() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    @asynccontextmanager
+    async def connector():
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 10:
+            raise OSError("Core unavailable")
+        yield FakeSocket(_socket_messages(), hold_open=True)
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    bridge = CoreHardwareBridge(
+        _settings(), _VOICE, FakeController(), token="synthetic-token",
+        rest=FakeRest(), connector=connector, sleep=sleep,
+    )
+
+    async def exercise() -> None:
+        await bridge.start()
+        for _ in range(1000):
+            if bridge.status()["connected"]:
+                break
+            await asyncio.sleep(0)
+        assert attempts == 11
+        assert bridge.status()["connected"] is True
+        await bridge.close()
+
+    _run(exercise())
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+    assert bridge.status()["reconnect_failures"] == 0
+
+
+def test_controller_failure_retries_until_recovery_and_close_is_safe() -> None:
     attempts = 0
     sleeps: list[float] = []
     controller = FakeController(fail_volume=True)
@@ -1232,7 +1267,12 @@ def test_controller_failure_reconnects_sets_terminal_status_and_close_is_safe() 
     async def connector():
         nonlocal attempts
         attempts += 1
-        yield FakeSocket(_socket_messages(snapshot_volume=0.20))
+        if attempts == 11:
+            controller.fail_volume = False
+        yield FakeSocket(
+            _socket_messages(snapshot_volume=0.20),
+            hold_open=attempts == 11,
+        )
 
     async def sleep(delay: float) -> None:
         sleeps.append(delay)
@@ -1244,21 +1284,24 @@ def test_controller_failure_reconnects_sets_terminal_status_and_close_is_safe() 
 
     async def exercise() -> None:
         await bridge.start()
-        while bridge.status()["running"]:
+        for _ in range(1000):
+            if attempts == 11 and bridge.status()["connected"]:
+                break
             await asyncio.sleep(0)
+        assert attempts == 11
+        assert bridge.status()["connected"] is True
         await bridge.close()
 
     _run(exercise())
-    assert attempts == 8
-    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0, 30.0, 30.0]
     status = bridge.status()
     assert status["running"] is False
     assert status["connected"] is False
-    assert status["reconnect_failures"] == 8
-    assert status["error"] == "PlayerError: Voice volume failed"
+    assert status["reconnect_failures"] == 0
+    assert status["error"] is None
 
 
-def test_play_media_observation_failure_uses_bounded_reconnect_and_safe_close() -> None:
+def test_play_media_observation_failure_retries_until_recovery() -> None:
     attempts = 0
     sleeps: list[float] = []
     controller = FakeController(fail_play_media_observation=True)
@@ -1267,7 +1310,12 @@ def test_play_media_observation_failure_uses_bounded_reconnect_and_safe_close() 
     async def connector():
         nonlocal attempts
         attempts += 1
-        yield FakeSocket(_play_media_observation_messages(f"owned-play-{attempts}"))
+        if attempts == 11:
+            controller.fail_play_media_observation = False
+        yield FakeSocket(
+            _play_media_observation_messages(f"owned-play-{attempts}"),
+            hold_open=attempts == 11,
+        )
 
     async def sleep(delay: float) -> None:
         sleeps.append(delay)
@@ -1284,21 +1332,24 @@ def test_play_media_observation_failure_uses_bounded_reconnect_and_safe_close() 
 
     async def exercise() -> None:
         await bridge.start()
-        while bridge.status()["running"]:
+        for _ in range(1000):
+            if attempts == 11 and bridge.status()["connected"]:
+                break
             await asyncio.sleep(0)
+        assert attempts == 11
+        assert bridge.status()["connected"] is True
         await bridge.close()
 
     _run(exercise())
-    assert attempts == 8
-    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0, 30.0, 30.0]
     status = bridge.status()
     assert status["running"] is False
     assert status["connected"] is False
-    assert status["reconnect_failures"] == 8
-    assert status["error"] == "PlayerError: Transport provenance failed"
+    assert status["reconnect_failures"] == 0
+    assert status["error"] is None
 
 
-def test_short_authenticated_sessions_consume_bounded_reconnect_budget() -> None:
+def test_authenticated_sessions_reset_reconnect_budget() -> None:
     attempts = 0
     sleeps: list[float] = []
 
@@ -1306,7 +1357,7 @@ def test_short_authenticated_sessions_consume_bounded_reconnect_budget() -> None
     async def connector():
         nonlocal attempts
         attempts += 1
-        yield FakeSocket(_socket_messages())
+        yield FakeSocket(_socket_messages(), hold_open=attempts == 10)
 
     async def sleep(delay: float) -> None:
         sleeps.append(delay)
@@ -1318,14 +1369,17 @@ def test_short_authenticated_sessions_consume_bounded_reconnect_budget() -> None
 
     async def exercise() -> None:
         await bridge.start()
-        while bridge.status()["running"]:
+        for _ in range(1000):
+            if attempts == 10 and bridge.status()["connected"]:
+                break
             await asyncio.sleep(0)
+        assert attempts == 10
+        assert bridge.status()["connected"] is True
         await bridge.close()
 
     _run(exercise())
-    assert attempts == 8
-    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
-    assert bridge.status()["reconnect_failures"] == 8
+    assert sleeps == [1.0] * 9
+    assert bridge.status()["reconnect_failures"] == 0
 
 
 def test_same_state_foreign_transport_event_blocks_hardware_gesture() -> None:

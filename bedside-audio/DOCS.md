@@ -33,13 +33,15 @@ or updating this app does not install the optional Voice PE firmware.
 Open **TV library** to follow the DLNA Video / TV Shows folders, then a show,
 season and episode. A folder's **Play first video in folder** button starts
 its first playable item. Next and Previous move through that folder in
-the order Core returned, including duplicate items, and never advance on
-an ambiguous Voice `idle`. The authenticated owner can browse folders and
-start a video whenever Voice and Core are available. A 1-720 minute sleep
-timer is optional. Stop sends `media_stop` and waits briefly for Voice to
-report `idle`; a failed stop blocks another play until Retry stop succeeds.
-The timer runs in the app when the browser is closed, but is canceled by an
-app restart.
+the order Core returned, including duplicate items. After Voice has reported
+active playback, a sustained `idle` advances to the next queue item. Voice
+does not distinguish a completed episode from an interruption, so an
+interruption that settles to `idle` can also advance. The authenticated owner
+can browse folders and start a video whenever Voice and Core are available. A
+1-720 minute sleep timer is optional. Stop sends `media_stop` and waits briefly
+for Voice to report `idle`; a failed stop blocks another play until Retry stop
+succeeds. The timer runs in the app when the browser is closed, but is canceled
+by an app restart.
 
 Configured playlists appear above the TV library only when at least one valid
 playlist is present in the App options. Starting one creates a Bedside-owned
@@ -56,7 +58,8 @@ recursively resolves its playable videos, applies one fresh standard-library
 shuffle for that explicit action, and starts the first shuffled item. Next,
 Previous and restart keep that queue and index. Reloading, reconnecting and
 polling do not reshuffle it. Browsing or selecting a folder never starts
-audio, and an idle player never advances to another item automatically.
+audio. Confirmed playback followed by a sustained `idle` advances to the next
+item automatically.
 
 Voice PE does not report a reliable TV episode position, duration or seek
 capability. Bedside offers no seek or saved-resume action. While Bedside owns
@@ -152,6 +155,9 @@ user through `auth/current_user`, then locally accepts only calls targeting
 the exact configured Voice entity. Snapshots after startup or reconnect may
 restore availability, volume and LED display, but never replay button events,
 service calls or transport actions. Live event tuples are deduplicated.
+Connection failures retry indefinitely with exponential backoff capped at 30
+seconds. A successfully authenticated Core session resets the backoff budget,
+so separate outages do not accumulate toward a permanent disconnect.
 
 The validated custom firmware event is named `Button press` and may report
 `single_press`, `double_press`, `triple_press`, `long_press` or
@@ -161,8 +167,10 @@ double press manually selects Next, and triple press restarts the current
 Bedside episode only after 10 seconds. At or before 10 seconds, or when the
 Bedside-owned position is unavailable, triple press selects Previous. Gestures
 are ignored while Assist is not idle, Voice is unavailable, stop/error
-recovery is active, or Bedside does not own the active transport. Idle, EOF,
-unavailable and reconnect snapshots never advance the queue.
+recovery is active, or Bedside does not own the active transport. Hardware
+snapshots never replay gestures or directly advance the queue. Controller
+polling advances only after Bedside-owned playback was observed active and
+then remained `idle`; unavailable and error states do not advance.
 
 Hardware transport gestures also require exact provenance. When the Voice
 state exposes `media_content_id`, it must match the item loaded for the

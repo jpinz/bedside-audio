@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Keep the hardware bridge reconnecting with a 30-second maximum backoff and
+  reset the budget after an authenticated Core WebSocket session.
+- Advance Bedside-owned queues after confirmed Voice playback settles to
+  `idle`, while keeping unavailable and error states fail-closed.
+
 ## 0.7.0
 
 - Preserve exact Bedside media provenance across ESPHome reconnects and

@@ -198,6 +198,22 @@ class PlaybackController:
         if snapshot.starting:
             self._playback = "buffering"
             return
+        if snapshot.ended:
+            if (
+                self._owns_transport
+                and self._queue_index + 1 < len(self._queue)
+            ):
+                self._play_queue_item(
+                    self._queue,
+                    self._queue_index + 1,
+                    queue_kind=self._queue_kind,
+                    queue_name=self._queue_name,
+                )
+                return
+            self._playback = "stopped"
+            self._revoke_transport_ownership()
+            self._persist()
+            return
         if not snapshot.active:
             self._playback = "stopped"
             self._revoke_transport_ownership()
@@ -268,7 +284,7 @@ class PlaybackController:
                 "capabilities": {
                     "seek": False,
                     "resume": False,
-                    "auto_advance": False,
+                    "auto_advance": True,
                     "position": self._position_reliable,
                     "max_volume": self.max_volume,
                 },

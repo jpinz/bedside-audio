@@ -179,3 +179,55 @@ def test_timer_stops_dlna_voice_without_advancing_queue(tmp_path: Path) -> None:
     assert controller.state()["timer_remaining"] is None
     assert [action for action, _ in session.actions].count("play_media") == 1
     assert session.actions[-1] == ("media_stop", {"entity_id": _VOICE})
+
+
+def test_completed_dlna_voice_playback_advances_queue(tmp_path: Path) -> None:
+    class CompletedSession(CoreSession):
+        def request(self, method: str, url: str, **kwargs):
+            if url.endswith("/media_stop"):
+                return Response({"detail": "already idle"}, status_code=502)
+            return super().request(method, url, **kwargs)
+
+    clock = FakeClock()
+    session = CompletedSession()
+    player = VoicePlayer(
+        HomeAssistantClient("synthetic-token", session=session),
+        _VOICE, 15, 50, clock=clock,
+    )
+
+    class Queue:
+        def health(self, relative: str | None = None) -> None:
+            return None
+
+        def prepare(self, relative: str):
+            assert relative in ("a", "b")
+            return (
+                DlnaMedia(
+                    f"media-source://dlna_dms/calculon/:4{relative}",
+                    "video/x-matroska", relative, f"DLNA / {relative}",
+                ),
+                ["a", "b"], 0 if relative == "a" else 1,
+            )
+
+        def file(self, relative: str):
+            return self.prepare(relative)[0]
+
+    controller = PlaybackController(
+        DlnaLibraryCatalog(Queue()), player,
+        StateStore(tmp_path / "state", 15), clock=clock, max_volume=50,
+    )
+    controller.play("dlna/a")
+    session.player_state = "playing"
+    assert controller.state()["playback"] == "playing"
+
+    session.player_state = "idle"
+    assert controller.state()["playback"] == "buffering"
+    clock.advance(3)
+    state = controller.state()
+
+    assert state["current"]["path"] == "dlna/b"
+    assert state["queue"]["index"] == 1
+    assert state["playback"] == "playing"
+    assert state["capabilities"]["auto_advance"] is True
+    assert [action for action, _ in session.actions].count("play_media") == 2
+    assert [action for action, _ in session.actions].count("media_stop") == 0

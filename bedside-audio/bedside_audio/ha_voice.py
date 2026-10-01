@@ -317,9 +317,13 @@ class VoicePlayer:
                 self._heard_playing or now - self._started_at < _START_SECONDS
             ):
                 return PlayerSnapshot(starting=True, provenance=provenance)
-            return PlayerSnapshot(
-                error="Voice stopped playing; it cannot distinguish an episode end from an interruption",
-            )
+            if self._heard_playing:
+                self._core_media_active = False
+                self._media_content_id = None
+                self._idle_since = None
+                self._heard_playing = False
+                return PlayerSnapshot(ended=True, provenance=provenance)
+            return PlayerSnapshot(error="Voice stopped before playback started")
         return PlayerSnapshot(error="Voice media player state is unavailable")
 
     def transport_provenance(

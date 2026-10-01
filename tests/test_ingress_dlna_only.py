@@ -367,7 +367,7 @@ def test_dlna_play_uses_no_legacy_plex_token_or_automatic_start(
         playing = _post(client, "/api/play", {"path": episode["path"]})
         assert playing.status_code == 200
         assert playing.json()["queue"]["length"] == 1
-        assert playing.json()["capabilities"]["auto_advance"] is False
+        assert playing.json()["capabilities"]["auto_advance"] is True
         assert isinstance(player.loads[-1], DlnaMedia)
         assert player.loads[-1].media_content_id == _PREFIX + "42"
         assert "synthetic-invalid-pms-token" not in playing.text
