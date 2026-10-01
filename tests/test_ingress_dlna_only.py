@@ -42,16 +42,18 @@ def _settings(
     playlists: tuple[PlaylistSettings, ...] = (),
     allowed_folders: tuple[tuple[str, ...], ...] = (),
     excluded_title_patterns: tuple[str, ...] = (),
+    browse_root: tuple[str, ...] = (),
 ) -> Settings:
     return Settings(
         state_dir=tmp_path / "state",
         voice=VoiceSettings(_VOICE),
         dlna=DlnaSettings(
-            "plex_media_server_example",
-            _TV,
-            owner,
-            allowed_folders,
-            excluded_title_patterns,
+            source_id="plex_media_server_example",
+            browse_player_entity_id=_TV,
+            owner_user_id=owner,
+            allowed_folders=allowed_folders,
+            excluded_title_patterns=excluded_title_patterns,
+            browse_root=browse_root,
         ),
         playlists=playlists,
     )
@@ -528,6 +530,47 @@ def test_library_allowlist_surfaces_only_configured_show_and_descendants(
             "/api/library", params={"path": seasons[0]["path"]},
         ).json()["entries"]
         assert [entry["name"] for entry in episodes] == ["Episode 1"]
+
+
+def test_library_root_starts_api_browsing_below_configured_ancestors(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        _OWNER,
+        allowed_folders=(("Video", "TV Shows", "Example Show"),),
+        excluded_title_patterns=("specials", "Season 0*"),
+        browse_root=("Video", "TV Shows"),
+    )
+    app = create_app(
+        settings,
+        FakePlayer(),
+        run_worker=False,
+        dlna_browser=FilteredLibraryBrowser(),
+    )
+
+    with TestClient(
+        app,
+        base_url="https://homeassistant.local",
+        client=("172.30.32.2", 55000),
+        headers=_INGRESS,
+    ) as client:
+        listing = client.get(
+            "/api/library",
+            params={"path": "dlna"},
+        ).json()
+
+        assert listing["parent"] == ""
+        assert listing["display_path"] == "DLNA / Video / TV Shows"
+        assert [entry["name"] for entry in listing["entries"]] == [
+            "Example Show",
+        ]
+
+        seasons = client.get(
+            "/api/library",
+            params={"path": listing["entries"][0]["path"]},
+        ).json()["entries"]
+        assert [entry["name"] for entry in seasons] == ["Season 1"]
 
 
 def test_playlist_and_folder_shuffle_routes_keep_owner_and_csrf_protection(

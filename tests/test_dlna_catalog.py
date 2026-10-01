@@ -76,6 +76,7 @@ def make_catalog(
     browser: Browser,
     allowed_folders: tuple[tuple[str, ...], ...] = (),
     excluded_title_patterns: tuple[str, ...] = (),
+    browse_root: tuple[str, ...] = (),
 ) -> DlnaCatalog:
     return DlnaCatalog(
         DlnaSettings(
@@ -84,6 +85,7 @@ def make_catalog(
             owner_user_id="owner",
             allowed_folders=allowed_folders,
             excluded_title_patterns=excluded_title_patterns,
+            browse_root=browse_root,
         ),
         browser,
     )
@@ -130,6 +132,44 @@ def test_root_browse_exposes_only_video_and_folder_handles_to_browser() -> None:
     assert "private-server" not in exposed
     assert "secret" not in exposed
     assert browser.calls == [(ENTITY_ID, ROOT_ID, FOLDER_TYPE)]
+
+
+def test_configured_root_starts_browsing_inside_exact_folder_path() -> None:
+    video_folder = folder("Video", "0$video")
+    tv_folder = folder("TV Shows", "0$video$tv")
+    all_shows_folder = folder("All Shows", "0$video$tv$all")
+    example_show = folder("Example Show", "0$video$tv$all$example")
+    browser = Browser({
+        ROOT_ID: response(folder("Library", "0"), [video_folder]),
+        str(video_folder["media_content_id"]): response(
+            video_folder, [tv_folder],
+        ),
+        str(tv_folder["media_content_id"]): response(
+            tv_folder, [all_shows_folder],
+        ),
+        str(all_shows_folder["media_content_id"]): response(
+            all_shows_folder, [example_show],
+        ),
+    })
+    catalog = make_catalog(
+        browser,
+        browse_root=("Video", "TV Shows", "All Shows"),
+    )
+
+    listing = catalog.list_dir()
+
+    assert listing["path"] == ""
+    assert listing["parent"] is None
+    assert listing["display_path"] == "DLNA / Video / TV Shows / All Shows"
+    assert [(entry["name"], entry["kind"]) for entry in listing["entries"]] == [
+        ("Example Show", "folder"),
+    ]
+    assert browser.calls == [
+        (ENTITY_ID, ROOT_ID, FOLDER_TYPE),
+        (ENTITY_ID, str(video_folder["media_content_id"]), FOLDER_TYPE),
+        (ENTITY_ID, str(tv_folder["media_content_id"]), FOLDER_TYPE),
+        (ENTITY_ID, str(all_shows_folder["media_content_id"]), FOLDER_TYPE),
+    ]
 
 
 def test_library_allowlist_hides_siblings_and_blocks_configured_queue_bypass() -> None:

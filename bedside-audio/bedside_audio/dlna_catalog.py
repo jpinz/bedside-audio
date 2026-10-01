@@ -86,6 +86,7 @@ class DlnaCatalog:
             unicodedata.normalize("NFKC", pattern).casefold()
             for pattern in settings.excluded_title_patterns
         )
+        self._browse_root = settings.browse_root
         self._lock = RLock()
         self._handles: OrderedDict[str, _Node] = OrderedDict()
         self._last_error: str | None = None
@@ -111,7 +112,7 @@ class DlnaCatalog:
 
     def list_dir(self, relative: str = "") -> DirectoryListing:
         if relative == "":
-            parent = self._root()
+            parent = self._visible_root()
         else:
             parent = self._resolve(relative)
             if parent.kind != "folder":
@@ -133,6 +134,29 @@ class DlnaCatalog:
             "display_path": parent.display_path,
             "folder_queue": any(child.kind == "file" for child in children),
         }
+
+    def _visible_root(self) -> _Node:
+        if not self._browse_root:
+            return self._root()
+        selected, _ = self._resolve_named_path(
+            self._browse_root,
+            label="Configured library root",
+        )
+        if selected.kind != "folder":
+            raise MediaNotFound("Configured library root is not a folder")
+        return _Node(
+            selected.media_id,
+            selected.media_type,
+            selected.name,
+            selected.title_path,
+            "folder",
+            selected.display_path,
+            None,
+            None,
+            None,
+            "",
+            -1,
+        )
 
     def prepare(self, relative: str) -> tuple[DlnaMedia, list[str], int]:
         selected, children = self._selected_with_siblings(relative)
@@ -229,7 +253,12 @@ class DlnaCatalog:
             raise MediaNotFound("DLNA file is no longer available")
         return selected, children
 
-    def _resolve_named_path(self, path: tuple[str, ...]) -> tuple[_Node, str]:
+    def _resolve_named_path(
+        self,
+        path: tuple[str, ...],
+        *,
+        label: str = "Configured playlist item",
+    ) -> tuple[_Node, str]:
         parent = self._root()
         parent_handle = ""
         selected: _Node | None = None
@@ -239,11 +268,11 @@ class DlnaCatalog:
             matches = [child for child in children if child.name == name]
             if not matches:
                 raise MediaNotFound(
-                    f"Configured playlist item is unavailable at {name!r}",
+                    f"{label} is unavailable at {name!r}",
                 )
             if len(matches) != 1:
                 raise MediaNotFound(
-                    f"Configured playlist item is ambiguous at {name!r}",
+                    f"{label} is ambiguous at {name!r}",
                 )
             selected = matches[0]
             with self._lock:
@@ -253,12 +282,12 @@ class DlnaCatalog:
                 selected = self._handles[selected_handle]
             if index + 1 < len(path) and selected.kind != "folder":
                 raise MediaNotFound(
-                    f"Configured playlist path continues after file {name!r}",
+                    f"{label} path continues after file {name!r}",
                 )
             parent = selected
             parent_handle = selected_handle
         if selected is None:
-            raise MediaNotFound("Configured playlist item is empty")
+            raise MediaNotFound(f"{label} is empty")
         return selected, selected_handle
 
     def _append_folder_queue(

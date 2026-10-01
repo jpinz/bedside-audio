@@ -93,6 +93,7 @@ responses to avoid running stale JavaScript through Ingress.
 | `dlna_owner_user_id` | Trusted HA Ingress user ID, required on a fresh install. On an upgrade it may be blank only when a valid legacy owner record supplies the same HA user ID. |
 | `library_exclude_patterns` | Optional case-insensitive glob patterns matched against each folder and video title. Matching folders and their descendants are hidden. |
 | `library_folders` | Optional allowlist of exact DLNA folder title paths. The default empty list exposes the full video library. |
+| `library_root_folder` | Optional exact DLNA folder title path whose contents become the top level of library browsing. The default empty value starts at the DLNA source root. |
 | `max_volume` | Voice cap from 1 to 50 percent; default is 50. Startup and saved volume remain at their existing value (15 on a fresh install) unless that value exceeds the configured cap. Do not raise Voice volume for a test. |
 | `led_playing_color` | Custom-firmware playing color in canonical `#RRGGBB`; default `#00FF30`. |
 | `led_playing_brightness` | Playing brightness from 1 to 100 percent; default `12`. |
@@ -128,11 +129,21 @@ voice_led_select_entity: select.bedside_voice_pe_bedside_display_intent
 voice_led_theme_text_entity: text.bedside_voice_pe_bedside_led_theme
 ```
 
-### Custom playlist options
+### Library and playlist options
 
 Supervisor app schemas support nested arrays and dictionaries only to a depth
-of two. Each `library_folders` record therefore stores one exact folder path
-as a JSON array of titles:
+of two. Exact DLNA paths are therefore stored as JSON arrays of titles. To
+start browsing directly inside one folder, configure:
+
+```yaml
+library_root_folder: '["Video","TV Shows","All Shows"]'
+```
+
+The configured folder and its ancestors are not shown in the library browser;
+its children become the entries under `TV library`. The path is resolved from
+the DLNA source root. An empty value preserves browsing from that source root.
+
+Each `library_folders` record stores one exact folder path in the same format:
 
 ```yaml
 library_folders:
@@ -148,6 +159,11 @@ configured paths are simply absent; duplicate matching folder titles or a path
 that resolves to a playable file fail browsing closed with a visible error. An
 installation may configure at most 32 unique folder paths, each with at most 16
 segments.
+
+The root folder, allowed folders, and playlist items are all absolute title
+paths from the DLNA source root. Setting `library_root_folder` does not make the
+other paths relative. Allowlist and exclusion rules continue to apply while
+resolving the root and to everything shown beneath it.
 
 Exclusions apply after the allowlist and always win. Patterns match one folder
 or video title, not a full path, without regard to capitalization. `*` matches

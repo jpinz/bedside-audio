@@ -70,6 +70,7 @@ class DlnaSettings:
     owner_user_id: str | None = None
     allowed_folders: tuple[tuple[str, ...], ...] = ()
     excluded_title_patterns: tuple[str, ...] = ()
+    browse_root: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, str) or not re.fullmatch(
@@ -118,6 +119,15 @@ class DlnaSettings:
         ]
         if len(set(normalized_patterns)) != len(normalized_patterns):
             raise ValueError("Library exclusion patterns must be unique")
+        if (
+            not isinstance(self.browse_root, tuple)
+            or len(self.browse_root) > MAX_PLAYLIST_PATH_SEGMENTS
+            or any(
+                not _valid_dlna_path_segment(segment)
+                for segment in self.browse_root
+            )
+        ):
+            raise ValueError("Library root folder must be a valid DLNA title path")
 
 
 @dataclass(frozen=True, slots=True)
