@@ -64,7 +64,7 @@ def test_saved_plex_item_never_appears_or_autoplays_in_dlna_only_remote(
     assert not hasattr(controller, "forget_plex")
 
 
-def test_dlna_manual_queue_and_sleep_timer_never_auto_next(tmp_path: Path) -> None:
+def test_dlna_queue_supports_manual_skip_and_sleep_timer(tmp_path: Path) -> None:
     clock = FakeClock()
     player = FakePlayer()
     controller = PlaybackController(
@@ -81,7 +81,7 @@ def test_dlna_manual_queue_and_sleep_timer_never_auto_next(tmp_path: Path) -> No
         "kind": "folder",
         "name": None,
     }
-    assert first["capabilities"]["auto_advance"] is False
+    assert first["capabilities"]["auto_advance"] is True
     assert controller.skip("next")["current"]["path"] == "dlna/b"
     assert controller.skip("previous")["current"]["path"] == "dlna/a"
     assert len(player.loads) == 3

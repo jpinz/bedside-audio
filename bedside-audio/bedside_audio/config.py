@@ -10,6 +10,10 @@ MAX_PLAYLIST_ITEMS = 64
 MAX_PLAYLIST_PATH_SEGMENTS = 16
 MAX_PLAYLIST_NAME_LENGTH = 64
 MAX_PLAYLIST_ITEM_TEXT_LENGTH = 8192
+MAX_LIBRARY_FOLDERS = 32
+MAX_LIBRARY_PATH_TEXT_LENGTH = 1024
+MAX_LIBRARY_EXCLUDE_PATTERNS = 32
+MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH = 256
 LED_THEME_PAYLOAD_LENGTH = 50
 _UNSAFE_PLAYLIST_SEGMENT = re.compile(
     r"(?:^[\\/]|^[A-Za-z]:[\\/]|[A-Za-z][A-Za-z0-9+.-]*://|media-source:)",
@@ -31,10 +35,17 @@ def _valid_label(value: object, *, maximum: int) -> bool:
     )
 
 
-def _valid_playlist_segment(value: object) -> bool:
+def _valid_dlna_path_segment(value: object) -> bool:
     return (
         _valid_label(value, maximum=256)
         and not _UNSAFE_PLAYLIST_SEGMENT.search(value)
+    )
+
+
+def _valid_library_exclude_pattern(value: object) -> bool:
+    return (
+        _valid_label(value, maximum=MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH)
+        and not value.startswith("/")
     )
 
 
@@ -57,6 +68,8 @@ class DlnaSettings:
     source_id: str
     browse_player_entity_id: str
     owner_user_id: str | None = None
+    allowed_folders: tuple[tuple[str, ...], ...] = ()
+    excluded_title_patterns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, str) or not re.fullmatch(
@@ -72,6 +85,39 @@ class DlnaSettings:
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.owner_user_id)
         ):
             raise ValueError("dlna_owner_user_id must name one Home Assistant user")
+        if (
+            not isinstance(self.allowed_folders, tuple)
+            or len(self.allowed_folders) > MAX_LIBRARY_FOLDERS
+        ):
+            raise ValueError(
+                f"Configure no more than {MAX_LIBRARY_FOLDERS} library folders",
+            )
+        for path in self.allowed_folders:
+            if (
+                not isinstance(path, tuple)
+                or not 1 <= len(path) <= MAX_PLAYLIST_PATH_SEGMENTS
+                or any(not _valid_dlna_path_segment(segment) for segment in path)
+            ):
+                raise ValueError("Library folders must be valid DLNA title paths")
+        if len(set(self.allowed_folders)) != len(self.allowed_folders):
+            raise ValueError("Library folder paths must be unique")
+        if (
+            not isinstance(self.excluded_title_patterns, tuple)
+            or len(self.excluded_title_patterns) > MAX_LIBRARY_EXCLUDE_PATTERNS
+            or any(
+                not _valid_library_exclude_pattern(pattern)
+                for pattern in self.excluded_title_patterns
+            )
+        ):
+            raise ValueError(
+                "Library exclusion patterns must be safe title glob patterns",
+            )
+        normalized_patterns = [
+            unicodedata.normalize("NFKC", pattern).casefold()
+            for pattern in self.excluded_title_patterns
+        ]
+        if len(set(normalized_patterns)) != len(normalized_patterns):
+            raise ValueError("Library exclusion patterns must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +250,7 @@ class PlaylistSettings:
             if (
                 not isinstance(item, tuple)
                 or not 1 <= len(item) <= MAX_PLAYLIST_PATH_SEGMENTS
-                or any(not _valid_playlist_segment(segment) for segment in item)
+                or any(not _valid_dlna_path_segment(segment) for segment in item)
             ):
                 raise ValueError(
                     f"Playlist {self.name!r} contains an invalid DLNA title path",

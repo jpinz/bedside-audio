@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional exact-path library allowlist that preserves only configured
+  show folders, their ancestors and their descendants.
+- Add case-insensitive title glob exclusions for hiding folders such as
+  `Specials` or `Season 0*` and their complete subtrees.
+- Keep the hardware bridge reconnecting with a 30-second maximum backoff and
+  reset the budget after an authenticated Core WebSocket session.
+- Advance Bedside-owned queues after confirmed Voice playback settles to
+  `idle`, while keeping unavailable and error states fail-closed.
+
 ## 0.8.0
 
 - Add strict color and brightness options for the playing, paused, sleeping,

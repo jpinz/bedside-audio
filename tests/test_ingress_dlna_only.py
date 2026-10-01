@@ -40,11 +40,19 @@ def _settings(
     tmp_path: Path,
     owner: str | None = None,
     playlists: tuple[PlaylistSettings, ...] = (),
+    allowed_folders: tuple[tuple[str, ...], ...] = (),
+    excluded_title_patterns: tuple[str, ...] = (),
 ) -> Settings:
     return Settings(
         state_dir=tmp_path / "state",
         voice=VoiceSettings(_VOICE),
-        dlna=DlnaSettings("plex_media_server_example", _TV, owner),
+        dlna=DlnaSettings(
+            "plex_media_server_example",
+            _TV,
+            owner,
+            allowed_folders,
+            excluded_title_patterns,
+        ),
         playlists=playlists,
     )
 
@@ -162,6 +170,101 @@ class PlaylistBrowser:
                     self._video(self.first_id, "Episode 1"),
                     self._video(self.second_id, "Episode 2"),
                 ],
+            )
+        raise AssertionError(f"Unexpected browse ID {media_content_id}")
+
+
+class FilteredLibraryBrowser:
+    def __init__(self) -> None:
+        self.video_id = _PREFIX + "video"
+        self.photos_id = _PREFIX + "photos"
+        self.movies_id = _PREFIX + "video$movies"
+        self.tv_id = _PREFIX + "video$tv"
+        self.allowed_id = _PREFIX + "video$tv$allowed"
+        self.hidden_id = _PREFIX + "video$tv$hidden"
+        self.specials_id = _PREFIX + "video$tv$allowed$specials"
+        self.season_zero_id = _PREFIX + "video$tv$allowed$season0"
+        self.season_id = _PREFIX + "video$tv$allowed$season"
+        self.episode_id = _PREFIX + "video$tv$allowed$season$episode"
+
+    @staticmethod
+    def _folder(media_id: str, title: str, children: list[dict[str, object]]):
+        return {
+            "media_content_id": media_id,
+            "media_content_type": "object.container.storageFolder",
+            "title": title,
+            "media_class": "directory",
+            "can_expand": True,
+            "can_play": False,
+            "not_shown": 0,
+            "children": children,
+        }
+
+    @staticmethod
+    def _folder_entry(media_id: str, title: str):
+        return {
+            "media_content_id": media_id,
+            "media_content_type": "object.container.storageFolder",
+            "title": title,
+            "media_class": "directory",
+            "can_expand": True,
+            "can_play": False,
+        }
+
+    def browse_media(
+        self, entity_id: str, media_content_id: str, media_content_type: str,
+    ):
+        assert entity_id == _TV
+        assert media_content_type == "object.container.storageFolder"
+        if media_content_id == _PREFIX + "0":
+            return self._folder(
+                media_content_id,
+                "Library",
+                [
+                    self._folder_entry(self.video_id, "Video"),
+                    self._folder_entry(self.photos_id, "Photos"),
+                ],
+            )
+        if media_content_id == self.video_id:
+            return self._folder(
+                media_content_id,
+                "Video",
+                [
+                    self._folder_entry(self.movies_id, "Movies"),
+                    self._folder_entry(self.tv_id, "TV Shows"),
+                ],
+            )
+        if media_content_id == self.tv_id:
+            return self._folder(
+                media_content_id,
+                "TV Shows",
+                [
+                    self._folder_entry(self.allowed_id, "Example Show"),
+                    self._folder_entry(self.hidden_id, "Hidden Show"),
+                ],
+            )
+        if media_content_id == self.allowed_id:
+            return self._folder(
+                media_content_id,
+                "Example Show",
+                [
+                    self._folder_entry(self.specials_id, "Specials"),
+                    self._folder_entry(self.season_zero_id, "Season 0"),
+                    self._folder_entry(self.season_id, "Season 1"),
+                ],
+            )
+        if media_content_id == self.season_id:
+            return self._folder(
+                media_content_id,
+                "Season 1",
+                [{
+                    "media_content_id": self.episode_id,
+                    "media_content_type": "video/x-matroska",
+                    "title": "Episode 1",
+                    "media_class": "episode",
+                    "can_expand": False,
+                    "can_play": True,
+                }],
             )
         raise AssertionError(f"Unexpected browse ID {media_content_id}")
 
@@ -367,7 +470,7 @@ def test_dlna_play_uses_no_legacy_plex_token_or_automatic_start(
         playing = _post(client, "/api/play", {"path": episode["path"]})
         assert playing.status_code == 200
         assert playing.json()["queue"]["length"] == 1
-        assert playing.json()["capabilities"]["auto_advance"] is False
+        assert playing.json()["capabilities"]["auto_advance"] is True
         assert isinstance(player.loads[-1], DlnaMedia)
         assert player.loads[-1].media_content_id == _PREFIX + "42"
         assert "synthetic-invalid-pms-token" not in playing.text
@@ -377,6 +480,54 @@ def test_dlna_play_uses_no_legacy_plex_token_or_automatic_start(
         assert player.active is False
         assert len(player.loads) == 1
         assert _post(client, "/api/bedtime/start").status_code == 404
+
+
+def test_library_allowlist_surfaces_only_configured_show_and_descendants(
+    tmp_path: Path,
+) -> None:
+    browser = FilteredLibraryBrowser()
+    settings = _settings(
+        tmp_path,
+        _OWNER,
+        allowed_folders=(("Video", "TV Shows", "Example Show"),),
+        excluded_title_patterns=("specials", "Season 0*"),
+    )
+    app = create_app(
+        settings,
+        FakePlayer(),
+        run_worker=False,
+        dlna_browser=browser,
+    )
+    with TestClient(
+        app, base_url="https://homeassistant.local",
+        client=("172.30.32.2", 55000), headers=_INGRESS,
+    ) as client:
+        video = client.get(
+            "/api/library", params={"path": "dlna"},
+        ).json()["entries"]
+        assert [(entry["name"], entry["kind"]) for entry in video] == [
+            ("Video", "folder"),
+        ]
+
+        tv_shows = client.get(
+            "/api/library", params={"path": video[0]["path"]},
+        ).json()["entries"]
+        assert [entry["name"] for entry in tv_shows] == ["TV Shows"]
+
+        shows = client.get(
+            "/api/library", params={"path": tv_shows[0]["path"]},
+        ).json()["entries"]
+        assert [entry["name"] for entry in shows] == ["Example Show"]
+
+        seasons = client.get(
+            "/api/library", params={"path": shows[0]["path"]},
+        ).json()["entries"]
+        assert [entry["name"] for entry in seasons] == ["Season 1"]
+
+        episodes = client.get(
+            "/api/library", params={"path": seasons[0]["path"]},
+        ).json()["entries"]
+        assert [entry["name"] for entry in episodes] == ["Episode 1"]
 
 
 def test_playlist_and_folder_shuffle_routes_keep_owner_and_csrf_protection(

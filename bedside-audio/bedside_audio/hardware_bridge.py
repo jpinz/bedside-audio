@@ -22,7 +22,7 @@ from .player import PlayerError
 logger = logging.getLogger(__name__)
 _CORE_WS = "ws://supervisor/core/websocket"
 _CORE_API = "http://supervisor/core/api"
-_MAX_RECONNECT_FAILURES = 8
+_MAX_RECONNECT_BACKOFF_FAILURES = 8
 _MAX_RECONNECT_SECONDS = 30.0
 _MAX_DEDUPLICATION_KEYS = 256
 _CUSTOM_LED_OPTIONS = frozenset({"off", "playing", "paused", "sleeping"})
@@ -624,9 +624,10 @@ class CoreHardwareBridge:
     async def _run(self) -> None:
         failures = 0
         try:
-            while failures < _MAX_RECONNECT_FAILURES:
+            while True:
                 try:
                     await self.run_once()
+                    failures = 0
                     raise BridgeProtocolError("Core WebSocket closed")
                 except asyncio.CancelledError:
                     raise
@@ -644,7 +645,8 @@ class CoreHardwareBridge:
                     json.JSONDecodeError,
                 ) as exc:
                     failures += 1
-                    delay = min(2 ** (failures - 1), _MAX_RECONNECT_SECONDS)
+                    backoff_step = min(failures, _MAX_RECONNECT_BACKOFF_FAILURES)
+                    delay = min(2 ** (backoff_step - 1), _MAX_RECONNECT_SECONDS)
                     self._set_status(
                         connected=False,
                         reconnect_failures=failures,
@@ -652,13 +654,11 @@ class CoreHardwareBridge:
                     )
                     logger.warning(
                         "Home Assistant Core hardware bridge disconnected "
-                        "(attempt %s/%s): %s",
+                        "(failure %s, retrying in %ss): %s",
                         failures,
-                        _MAX_RECONNECT_FAILURES,
+                        delay,
                         exc,
                     )
-                    if failures >= _MAX_RECONNECT_FAILURES:
-                        break
                     await self._sleep(delay)
         finally:
             self._set_status(running=False, connected=False)

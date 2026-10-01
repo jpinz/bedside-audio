@@ -15,6 +15,7 @@ class PlayerSnapshot:
     active: bool = False
     paused: bool = False
     starting: bool = False
+    ended: bool = False
     error: str | None = None
     provenance: bool | None = None
 

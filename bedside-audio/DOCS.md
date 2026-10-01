@@ -33,13 +33,15 @@ or updating this app does not install the optional Voice PE firmware.
 Open **TV library** to follow the DLNA Video / TV Shows folders, then a show,
 season and episode. A folder's **Play first video in folder** button starts
 its first playable item. Next and Previous move through that folder in
-the order Core returned, including duplicate items, and never advance on
-an ambiguous Voice `idle`. The authenticated owner can browse folders and
-start a video whenever Voice and Core are available. A 1-720 minute sleep
-timer is optional. Stop sends `media_stop` and waits briefly for Voice to
-report `idle`; a failed stop blocks another play until Retry stop succeeds.
-The timer runs in the app when the browser is closed, but is canceled by an
-app restart.
+the order Core returned, including duplicate items. After Voice has reported
+active playback, a sustained `idle` advances to the next queue item. Voice
+does not distinguish a completed episode from an interruption, so an
+interruption that settles to `idle` can also advance. The authenticated owner
+can browse folders and start a video whenever Voice and Core are available. A
+1-720 minute sleep timer is optional. Stop sends `media_stop` and waits briefly
+for Voice to report `idle`; a failed stop blocks another play until Retry stop
+succeeds. The timer runs in the app when the browser is closed, but is canceled
+by an app restart.
 
 Configured playlists appear above the TV library only when at least one valid
 playlist is present in the App options. Starting one creates a Bedside-owned
@@ -56,7 +58,8 @@ recursively resolves its playable videos, applies one fresh standard-library
 shuffle for that explicit action, and starts the first shuffled item. Next,
 Previous and restart keep that queue and index. Reloading, reconnecting and
 polling do not reshuffle it. Browsing or selecting a folder never starts
-audio, and an idle player never advances to another item automatically.
+audio. Confirmed playback followed by a sustained `idle` advances to the next
+item automatically.
 
 Voice PE does not report a reliable TV episode position, duration or seek
 capability. Bedside offers no seek or saved-resume action. While Bedside owns
@@ -88,6 +91,8 @@ responses to avoid running stale JavaScript through Ingress.
 | `dlna_source_id` | Exact HA `dlna_dms` source ID, for example `plex_media_server_example`; never a URL or browser-provided ID. |
 | `dlna_browse_player_entity_id` | Exact video-capable HA media player used for read-only browsing, for example `media_player.example_tv`; it must differ from the Voice player. |
 | `dlna_owner_user_id` | Trusted HA Ingress user ID, required on a fresh install. On an upgrade it may be blank only when a valid legacy owner record supplies the same HA user ID. |
+| `library_exclude_patterns` | Optional case-insensitive glob patterns matched against each folder and video title. Matching folders and their descendants are hidden. |
+| `library_folders` | Optional allowlist of exact DLNA folder title paths. The default empty list exposes the full video library. |
 | `max_volume` | Voice cap from 1 to 50 percent; default is 50. Startup and saved volume remain at their existing value (15 on a fresh install) unless that value exceeds the configured cap. Do not raise Voice volume for a test. |
 | `led_playing_color` | Custom-firmware playing color in canonical `#RRGGBB`; default `#00FF30`. |
 | `led_playing_brightness` | Playing brightness from 1 to 100 percent; default `12`. |
@@ -126,9 +131,42 @@ voice_led_theme_text_entity: text.bedside_voice_pe_bedside_led_theme
 ### Custom playlist options
 
 Supervisor app schemas support nested arrays and dictionaries only to a depth
-of two. Bedside therefore keeps each playlist's ordered item paths in one
-multiline string. Each non-empty line must be a JSON array of exact DLNA
-titles, starting below the configured DLNA source root:
+of two. Each `library_folders` record therefore stores one exact folder path
+as a JSON array of titles:
+
+```yaml
+library_folders:
+  - path: '["Video","TV Shows","<show folder>"]'
+  - path: '["Video","TV Shows","<another show folder>"]'
+```
+
+When the list is non-empty, browsing preserves the source hierarchy but shows
+only the ancestors needed to reach an allowed folder, the allowed folder, and
+everything below it. Sibling libraries, movies and shows remain hidden.
+Configured playlists and shuffle actions use the same allowlist. Missing
+configured paths are simply absent; duplicate matching folder titles or a path
+that resolves to a playable file fail browsing closed with a visible error. An
+installation may configure at most 32 unique folder paths, each with at most 16
+segments.
+
+Exclusions apply after the allowlist and always win. Patterns match one folder
+or video title, not a full path, without regard to capitalization. `*` matches
+any text, `?` matches one character, and bracket expressions such as `[0-2]`
+match one listed character:
+
+```yaml
+library_exclude_patterns:
+  - pattern: "Specials"
+  - pattern: "Season 0*"
+```
+
+The example hides a folder titled `Specials`, any title beginning with
+`Season 0`, and every item below matching folders. An installation may
+configure at most 32 unique patterns of at most 256 safe characters.
+
+Bedside keeps each playlist's ordered item paths in one multiline string. Each
+non-empty line must be a JSON array of exact DLNA titles, starting below the
+configured DLNA source root:
 
 ```yaml
 playlists:
@@ -141,10 +179,10 @@ playlists:
       ["TV Shows", "<show folder>", "<episode file>"]
 ```
 
-Replace every placeholder with the exact title shown while browsing the same
-configured DLNA source in Home Assistant. Do not include `DLNA`, `TV library`,
-the source ID, a `media-source://` value, a URL or a filesystem path. JSON
-arrays keep titles containing `/` unambiguous.
+Replace every placeholder in library folders and playlists with the exact title
+shown while browsing the same configured DLNA source in Home Assistant. Do not
+include `DLNA`, `TV library`, the source ID, a `media-source://` value, a URL or
+a filesystem path. JSON arrays keep titles containing `/` unambiguous.
 
 Playlist names are 1 to 64 safe characters and must be unique without relying
 on capitalization differences. An installation may configure at most 16
@@ -181,6 +219,9 @@ user through `auth/current_user`, then locally accepts only calls targeting
 the exact configured Voice entity. Snapshots after startup or reconnect may
 restore availability, volume and LED display, but never replay button events,
 service calls or transport actions. Live event tuples are deduplicated.
+Connection failures retry indefinitely with exponential backoff capped at 30
+seconds. A successfully authenticated Core session resets the backoff budget,
+so separate outages do not accumulate toward a permanent disconnect.
 
 The App serializes all four styles into one fixed 50-character payload:
 `v1|#RRGGBB@PPP|#RRGGBB@PPP|#RRGGBB@PPP|#RRGGBB@PPP`, ordered as playing,
@@ -199,8 +240,10 @@ double press manually selects Next, and triple press restarts the current
 Bedside episode only after 10 seconds. At or before 10 seconds, or when the
 Bedside-owned position is unavailable, triple press selects Previous. Gestures
 are ignored while Assist is not idle, Voice is unavailable, stop/error
-recovery is active, or Bedside does not own the active transport. Idle, EOF,
-unavailable and reconnect snapshots never advance the queue.
+recovery is active, or Bedside does not own the active transport. Hardware
+snapshots never replay gestures or directly advance the queue. Controller
+polling advances only after Bedside-owned playback was observed active and
+then remained `idle`; unavailable and error states do not advance.
 
 Hardware transport gestures also require exact provenance. When the Voice
 state exposes `media_content_id`, it must match the item loaded for the

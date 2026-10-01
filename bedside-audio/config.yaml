@@ -15,6 +15,8 @@ options:
   dlna_source_id: ""
   dlna_browse_player_entity_id: ""
   dlna_owner_user_id: ""
+  library_exclude_patterns: []
+  library_folders: []
   max_volume: 50
   led_playing_color: "#00FF30"
   led_playing_brightness: 12
@@ -36,6 +38,10 @@ schema:
   dlna_source_id: str
   dlna_browse_player_entity_id: str
   dlna_owner_user_id: str
+  library_exclude_patterns:
+    - pattern: "str(1,256)"
+  library_folders:
+    - path: "str(1,1024)"
   max_volume: "int(1,50)"
   led_playing_color: str
   led_playing_brightness: "int(1,100)"
