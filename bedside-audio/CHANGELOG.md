@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.0
+
+- Add an optional exact DLNA root folder so library browsing can begin at its
+  contents instead of exposing the source hierarchy above it.
+
 ## 0.9.0
 
 - Add an optional exact-path library allowlist that preserves only configured

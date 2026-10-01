@@ -94,6 +94,37 @@ def _parse_library_folders(value: object) -> tuple[tuple[str, ...], ...]:
     return tuple(folders)
 
 
+def _parse_library_root_folder(value: object) -> tuple[str, ...]:
+    if not isinstance(value, str):
+        raise ValueError("library_root_folder must be a string")
+    if not value:
+        return ()
+    if len(value) > MAX_LIBRARY_PATH_TEXT_LENGTH:
+        raise ValueError(
+            f"Library root folder must be at most "
+            f"{MAX_LIBRARY_PATH_TEXT_LENGTH} characters",
+        )
+    if value != value.strip():
+        raise ValueError("Library root folder cannot have outer whitespace")
+    try:
+        path = json.loads(value)
+    except ValueError as exc:
+        raise ValueError(
+            "Library root folder must be a JSON array of DLNA titles",
+        ) from exc
+    if not isinstance(path, list) or any(
+        not isinstance(part, str) for part in path
+    ):
+        raise ValueError(
+            "Library root folder must be a JSON array of DLNA titles",
+        )
+    if not path:
+        raise ValueError(
+            "Library root folder must contain at least one DLNA title",
+        )
+    return tuple(path)
+
+
 def _parse_playlists(value: object) -> tuple[PlaylistSettings, ...]:
     if not isinstance(value, list) or len(value) > MAX_PLAYLISTS:
         raise ValueError(f"playlists must be a list with at most {MAX_PLAYLISTS} entries")
@@ -174,7 +205,8 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
         "dlna_owner_user_id", "plex_networks", "plex_ports",
         "plex_allow_http", "plex_auth_mode", "ha_allow_http_link",
         "ha_http_link_origin",
-        "library_exclude_patterns", "library_folders", "playlists",
+        "library_exclude_patterns", "library_folders",
+        "library_root_folder", "playlists",
         "voice_button_event_entity", "voice_assist_satellite_entity",
         "voice_led_light_entity", "voice_led_select_entity",
         "voice_led_theme_text_entity",
@@ -197,12 +229,16 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
     excluded_patterns = _parse_library_exclude_patterns(
         options.get("library_exclude_patterns", []),
     )
+    browse_root = _parse_library_root_folder(
+        options.get("library_root_folder", ""),
+    )
     dlna = DlnaSettings(
-        source_id,
-        browse_player,
-        owner_user_id or None,
-        allowed_folders,
-        excluded_patterns,
+        source_id=source_id,
+        browse_player_entity_id=browse_player,
+        owner_user_id=owner_user_id or None,
+        allowed_folders=allowed_folders,
+        excluded_title_patterns=excluded_patterns,
+        browse_root=browse_root,
     )
     max_volume = options["max_volume"]
     if type(max_volume) is not int or not 1 <= max_volume <= 50:

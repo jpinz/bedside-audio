@@ -45,6 +45,7 @@ def test_dlna_only_options_accept_pruned_and_legacy_supervisor_shapes(
     assert clean.dlna.source_id == "plex_media_server_example"
     assert clean.dlna.browse_player_entity_id == "media_player.example_tv"
     assert clean.dlna.owner_user_id is None
+    assert clean.dlna.browse_root == ()
     assert clean.hardware.enabled is False
     assert clean.hardware.led_theme.payload == (
         "v1|#00FF30@012|#FF7000@018|#6000A0@008|#18BBF2@010"
@@ -109,6 +110,44 @@ def test_library_folders_parse_exact_dlna_title_paths(tmp_path: Path) -> None:
         ("Video", "TV Shows", "Example Show"),
         ("Video", "TV Shows", "Another Show"),
     )
+
+
+def test_library_root_folder_parses_one_exact_dlna_title_path(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        library_root_folder='["Video","TV Shows","All Shows"]',
+    )
+
+    assert settings.dlna.browse_root == (
+        "Video",
+        "TV Shows",
+        "All Shows",
+    )
+
+
+@pytest.mark.parametrize(
+    ("library_root_folder", "message"),
+    [
+        ({}, "must be a string"),
+        ("not-json", "JSON array"),
+        ("{}", "JSON array"),
+        ("[]", "at least one"),
+        (' ["Video","TV Shows"]', "outer whitespace"),
+        ('["https://example.invalid/shows"]', "valid DLNA title path"),
+    ],
+)
+def test_library_root_folder_fails_closed(
+    tmp_path: Path,
+    library_root_folder: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _settings(
+            tmp_path,
+            library_root_folder=library_root_folder,
+        )
 
 
 def test_library_exclusions_parse_case_insensitive_glob_patterns(
@@ -300,14 +339,16 @@ def test_manifest_does_not_expose_inert_plex_options() -> None:
     assert "ha_http_link_origin:" not in manifest
     assert "max_volume: 50" in manifest
     assert "max_volume: \"int(1,50)\"" in manifest
-    assert 'version: "0.9.0"' in manifest
+    assert 'version: "0.10.0"' in manifest
     assert "image: ghcr.io/jpinz/bedside-audio" in manifest
-    assert 'io.hass.version="0.9.0"' in dockerfile
-    assert pyproject["project"]["version"] == "0.9.0"
+    assert 'io.hass.version="0.10.0"' in dockerfile
+    assert pyproject["project"]["version"] == "0.10.0"
     assert "library_exclude_patterns: []" in manifest
     assert 'pattern: "str(1,256)"' in manifest
     assert "library_folders: []" in manifest
     assert 'path: "str(1,1024)"' in manifest
+    assert 'library_root_folder: ""' in manifest
+    assert "library_root_folder: str" in manifest
     assert "playlists: []" in manifest
     assert 'name: "str(1,64)"' in manifest
     assert 'items: "str(1,8192)"' in manifest
