@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0
+
 - Add an optional exact-path library allowlist that preserves only configured
   show folders, their ancestors and their descendants.
 - Add case-insensitive title glob exclusions for hiding folders such as
