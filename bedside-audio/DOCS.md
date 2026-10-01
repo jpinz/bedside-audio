@@ -91,6 +91,7 @@ responses to avoid running stale JavaScript through Ingress.
 | `dlna_source_id` | Exact HA `dlna_dms` source ID, for example `plex_media_server_example`; never a URL or browser-provided ID. |
 | `dlna_browse_player_entity_id` | Exact video-capable HA media player used for read-only browsing, for example `media_player.example_tv`; it must differ from the Voice player. |
 | `dlna_owner_user_id` | Trusted HA Ingress user ID, required on a fresh install. On an upgrade it may be blank only when a valid legacy owner record supplies the same HA user ID. |
+| `library_exclude_patterns` | Optional case-insensitive glob patterns matched against each folder and video title. Matching folders and their descendants are hidden. |
 | `library_folders` | Optional allowlist of exact DLNA folder title paths. The default empty list exposes the full video library. |
 | `max_volume` | Voice cap from 1 to 50 percent; default is 50. Startup and saved volume remain at their existing value (15 on a fresh install) unless that value exceeds the configured cap. Do not raise Voice volume for a test. |
 | `playlists` | Optional list of configured playlists. Each record has a unique `name` and a multiline `items` string as documented below. The default empty list preserves the previous interface and behavior. |
@@ -120,6 +121,21 @@ configured paths are simply absent; duplicate matching folder titles or a path
 that resolves to a playable file fail browsing closed with a visible error. An
 installation may configure at most 32 unique folder paths, each with at most 16
 segments.
+
+Exclusions apply after the allowlist and always win. Patterns match one folder
+or video title, not a full path, without regard to capitalization. `*` matches
+any text, `?` matches one character, and bracket expressions such as `[0-2]`
+match one listed character:
+
+```yaml
+library_exclude_patterns:
+  - pattern: "Specials"
+  - pattern: "Season 0*"
+```
+
+The example hides a folder titled `Specials`, any title beginning with
+`Season 0`, and every item below matching folders. An installation may
+configure at most 32 unique patterns of at most 256 safe characters.
 
 Bedside keeps each playlist's ordered item paths in one multiline string. Each
 non-empty line must be a JSON array of exact DLNA titles, starting below the

@@ -96,6 +96,44 @@ def test_library_folders_parse_exact_dlna_title_paths(tmp_path: Path) -> None:
     )
 
 
+def test_library_exclusions_parse_case_insensitive_glob_patterns(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        library_exclude_patterns=[
+            {"pattern": "Specials"},
+            {"pattern": "Season 0*"},
+        ],
+    )
+
+    assert settings.dlna.excluded_title_patterns == (
+        "Specials",
+        "Season 0*",
+    )
+
+
+@pytest.mark.parametrize(
+    ("patterns", "message"),
+    [
+        ({}, "library_exclude_patterns must be a list"),
+        ([{}], "only pattern"),
+        ([{"pattern": ""}], "1 to 256"),
+        ([{"pattern": " Specials"}], "safe title glob patterns"),
+        ([{"pattern": "/Specials"}], "safe title glob patterns"),
+        (
+            [{"pattern": "Specials"}, {"pattern": "SPECIALS"}],
+            "unique",
+        ),
+    ],
+)
+def test_library_exclusion_patterns_fail_closed(
+    tmp_path: Path, patterns: object, message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _settings(tmp_path, library_exclude_patterns=patterns)
+
+
 @pytest.mark.parametrize(
     ("library_folders", "message"),
     [
@@ -213,6 +251,8 @@ def test_manifest_does_not_expose_inert_plex_options() -> None:
     assert "image: ghcr.io/jpinz/bedside-audio" in manifest
     assert 'io.hass.version="0.7.0"' in dockerfile
     assert pyproject["project"]["version"] == "0.7.0"
+    assert "library_exclude_patterns: []" in manifest
+    assert 'pattern: "str(1,256)"' in manifest
     assert "library_folders: []" in manifest
     assert 'path: "str(1,1024)"' in manifest
     assert "playlists: []" in manifest

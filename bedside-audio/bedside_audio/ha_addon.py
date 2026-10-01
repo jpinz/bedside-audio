@@ -7,6 +7,8 @@ from pathlib import Path
 import uvicorn
 
 from .config import (
+    MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH,
+    MAX_LIBRARY_EXCLUDE_PATTERNS,
     MAX_LIBRARY_FOLDERS,
     MAX_LIBRARY_PATH_TEXT_LENGTH,
     MAX_PLAYLIST_ITEM_TEXT_LENGTH,
@@ -18,6 +20,31 @@ from .config import (
     Settings,
     VoiceSettings,
 )
+
+
+def _parse_library_exclude_patterns(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > MAX_LIBRARY_EXCLUDE_PATTERNS:
+        raise ValueError(
+            f"library_exclude_patterns must be a list with at most "
+            f"{MAX_LIBRARY_EXCLUDE_PATTERNS} entries",
+        )
+    patterns: list[str] = []
+    for record in value:
+        if not isinstance(record, dict) or set(record) != {"pattern"}:
+            raise ValueError(
+                "Each library exclusion must contain only pattern",
+            )
+        pattern = record["pattern"]
+        if (
+            not isinstance(pattern, str)
+            or not 1 <= len(pattern) <= MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH
+        ):
+            raise ValueError(
+                f"Library exclusion patterns must be 1 to "
+                f"{MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH} characters",
+            )
+        patterns.append(pattern)
+    return tuple(patterns)
 
 
 def _parse_library_folders(value: object) -> tuple[tuple[str, ...], ...]:
@@ -112,7 +139,7 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
         "dlna_owner_user_id", "plex_networks", "plex_ports",
         "plex_allow_http", "plex_auth_mode", "ha_allow_http_link",
         "ha_http_link_origin",
-        "library_folders", "playlists",
+        "library_exclude_patterns", "library_folders", "playlists",
         "voice_button_event_entity", "voice_assist_satellite_entity",
         "voice_led_light_entity", "voice_led_select_entity",
         "voice_volume_cap_number_entity",
@@ -127,11 +154,15 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
     browse_player = options.get("dlna_browse_player_entity_id", "")
     owner_user_id = options.get("dlna_owner_user_id", "")
     allowed_folders = _parse_library_folders(options.get("library_folders", []))
+    excluded_patterns = _parse_library_exclude_patterns(
+        options.get("library_exclude_patterns", []),
+    )
     dlna = DlnaSettings(
         source_id,
         browse_player,
         owner_user_id or None,
         allowed_folders,
+        excluded_patterns,
     )
     max_volume = options["max_volume"]
     if type(max_volume) is not int or not 1 <= max_volume <= 50:

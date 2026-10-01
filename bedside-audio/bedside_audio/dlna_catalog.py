@@ -6,6 +6,7 @@ import secrets
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from threading import RLock
 from typing import Literal, Protocol
 
@@ -81,6 +82,10 @@ class DlnaCatalog:
         self._root_id = f"{self._id_prefix}0"
         self._browser = browser
         self._allowed_folders = settings.allowed_folders
+        self._excluded_title_patterns = tuple(
+            unicodedata.normalize("NFKC", pattern).casefold()
+            for pattern in settings.excluded_title_patterns
+        )
         self._lock = RLock()
         self._handles: OrderedDict[str, _Node] = OrderedDict()
         self._last_error: str | None = None
@@ -409,6 +414,11 @@ class DlnaCatalog:
         return self._filter_nodes(parent, nodes)
 
     def _filter_nodes(self, parent: _Node, nodes: list[_Node]) -> list[_Node]:
+        nodes = [
+            node
+            for node in nodes
+            if not self._title_is_excluded(node.name)
+        ]
         if not self._allowed_folders:
             return nodes
         parent_path = parent.title_path
@@ -438,6 +448,13 @@ class DlnaCatalog:
                     f"Configured library folder is not a folder at {name!r}",
                 )
         return filtered
+
+    def _title_is_excluded(self, title: str) -> bool:
+        normalized = unicodedata.normalize("NFKC", title).casefold()
+        return any(
+            fnmatchcase(normalized, pattern)
+            for pattern in self._excluded_title_patterns
+        )
 
     @staticmethod
     def _safe_name(value: object) -> bool:

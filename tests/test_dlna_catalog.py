@@ -75,6 +75,7 @@ class Browser:
 def make_catalog(
     browser: Browser,
     allowed_folders: tuple[tuple[str, ...], ...] = (),
+    excluded_title_patterns: tuple[str, ...] = (),
 ) -> DlnaCatalog:
     return DlnaCatalog(
         DlnaSettings(
@@ -82,6 +83,7 @@ def make_catalog(
             browse_player_entity_id=ENTITY_ID,
             owner_user_id="owner",
             allowed_folders=allowed_folders,
+            excluded_title_patterns=excluded_title_patterns,
         ),
         browser,
     )
@@ -148,6 +150,29 @@ def test_library_allowlist_hides_siblings_and_blocks_configured_queue_bypass() -
     assert len(catalog.configured_queue((("Allowed Show",),))) == 1
     with pytest.raises(MediaNotFound, match="unavailable"):
         catalog.configured_queue((("Hidden Show",),))
+
+
+def test_library_exclusion_globs_hide_matching_titles_and_folder_subtrees() -> None:
+    specials = folder("Specials", "0$specials")
+    season_zero = folder("Season 0", "0$season0")
+    season_one = folder("Season 1", "0$season1")
+    preview = video("Season 01 Preview", "0$preview")
+    browser = Browser({
+        ROOT_ID: response(
+            folder("Library", "0"),
+            [specials, season_zero, season_one, preview],
+        ),
+    })
+    catalog = make_catalog(
+        browser,
+        excluded_title_patterns=("specials", "Season 0*"),
+    )
+
+    listing = catalog.list_dir()
+
+    assert [entry["name"] for entry in listing["entries"]] == ["Season 1"]
+    with pytest.raises(MediaNotFound, match="unavailable"):
+        catalog.configured_queue((("Specials",),))
 
 
 def test_mixed_dlna_video_classes_remain_playable_without_relaxing_mime_or_ids() -> None:

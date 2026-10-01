@@ -12,6 +12,8 @@ MAX_PLAYLIST_NAME_LENGTH = 64
 MAX_PLAYLIST_ITEM_TEXT_LENGTH = 8192
 MAX_LIBRARY_FOLDERS = 32
 MAX_LIBRARY_PATH_TEXT_LENGTH = 1024
+MAX_LIBRARY_EXCLUDE_PATTERNS = 32
+MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH = 256
 _UNSAFE_PLAYLIST_SEGMENT = re.compile(
     r"(?:^[\\/]|^[A-Za-z]:[\\/]|[A-Za-z][A-Za-z0-9+.-]*://|media-source:)",
     re.IGNORECASE,
@@ -38,6 +40,13 @@ def _valid_dlna_path_segment(value: object) -> bool:
     )
 
 
+def _valid_library_exclude_pattern(value: object) -> bool:
+    return (
+        _valid_label(value, maximum=MAX_LIBRARY_EXCLUDE_PATTERN_LENGTH)
+        and not value.startswith("/")
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class VoiceSettings:
     entity_id: str
@@ -58,6 +67,7 @@ class DlnaSettings:
     browse_player_entity_id: str
     owner_user_id: str | None = None
     allowed_folders: tuple[tuple[str, ...], ...] = ()
+    excluded_title_patterns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, str) or not re.fullmatch(
@@ -89,6 +99,23 @@ class DlnaSettings:
                 raise ValueError("Library folders must be valid DLNA title paths")
         if len(set(self.allowed_folders)) != len(self.allowed_folders):
             raise ValueError("Library folder paths must be unique")
+        if (
+            not isinstance(self.excluded_title_patterns, tuple)
+            or len(self.excluded_title_patterns) > MAX_LIBRARY_EXCLUDE_PATTERNS
+            or any(
+                not _valid_library_exclude_pattern(pattern)
+                for pattern in self.excluded_title_patterns
+            )
+        ):
+            raise ValueError(
+                "Library exclusion patterns must be safe title glob patterns",
+            )
+        normalized_patterns = [
+            unicodedata.normalize("NFKC", pattern).casefold()
+            for pattern in self.excluded_title_patterns
+        ]
+        if len(set(normalized_patterns)) != len(normalized_patterns):
+            raise ValueError("Library exclusion patterns must be unique")
 
 
 @dataclass(frozen=True, slots=True)

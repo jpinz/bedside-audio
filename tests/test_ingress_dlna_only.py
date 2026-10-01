@@ -41,6 +41,7 @@ def _settings(
     owner: str | None = None,
     playlists: tuple[PlaylistSettings, ...] = (),
     allowed_folders: tuple[tuple[str, ...], ...] = (),
+    excluded_title_patterns: tuple[str, ...] = (),
 ) -> Settings:
     return Settings(
         state_dir=tmp_path / "state",
@@ -50,6 +51,7 @@ def _settings(
             _TV,
             owner,
             allowed_folders,
+            excluded_title_patterns,
         ),
         playlists=playlists,
     )
@@ -180,6 +182,8 @@ class FilteredLibraryBrowser:
         self.tv_id = _PREFIX + "video$tv"
         self.allowed_id = _PREFIX + "video$tv$allowed"
         self.hidden_id = _PREFIX + "video$tv$hidden"
+        self.specials_id = _PREFIX + "video$tv$allowed$specials"
+        self.season_zero_id = _PREFIX + "video$tv$allowed$season0"
         self.season_id = _PREFIX + "video$tv$allowed$season"
         self.episode_id = _PREFIX + "video$tv$allowed$season$episode"
 
@@ -243,7 +247,11 @@ class FilteredLibraryBrowser:
             return self._folder(
                 media_content_id,
                 "Example Show",
-                [self._folder_entry(self.season_id, "Season 1")],
+                [
+                    self._folder_entry(self.specials_id, "Specials"),
+                    self._folder_entry(self.season_zero_id, "Season 0"),
+                    self._folder_entry(self.season_id, "Season 1"),
+                ],
             )
         if media_content_id == self.season_id:
             return self._folder(
@@ -482,6 +490,7 @@ def test_library_allowlist_surfaces_only_configured_show_and_descendants(
         tmp_path,
         _OWNER,
         allowed_folders=(("Video", "TV Shows", "Example Show"),),
+        excluded_title_patterns=("specials", "Season 0*"),
     )
     app = create_app(
         settings,

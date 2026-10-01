@@ -4,6 +4,8 @@
 
 - Add an optional exact-path library allowlist that preserves only configured
   show folders, their ancestors and their descendants.
+- Add case-insensitive title glob exclusions for hiding folders such as
+  `Specials` or `Season 0*` and their complete subtrees.
 - Keep the hardware bridge reconnecting with a 30-second maximum backoff and
   reset the budget after an authenticated Core WebSocket session.
 - Advance Bedside-owned queues after confirmed Voice playback settles to
