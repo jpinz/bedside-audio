@@ -81,6 +81,49 @@ def test_configured_playlists_parse_ordered_dlna_title_paths(tmp_path: Path) -> 
     )
 
 
+def test_library_folders_parse_exact_dlna_title_paths(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        library_folders=[
+            {"path": '["Video","TV Shows","Example Show"]'},
+            {"path": '["Video","TV Shows","Another Show"]'},
+        ],
+    )
+
+    assert settings.dlna.allowed_folders == (
+        ("Video", "TV Shows", "Example Show"),
+        ("Video", "TV Shows", "Another Show"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("library_folders", "message"),
+    [
+        ({}, "library_folders must be a list"),
+        ([{}], "only path"),
+        ([{"path": ""}], "1 to 1024"),
+        ([{"path": "not-json"}], "JSON arrays"),
+        ([{"path": "{}"}], "JSON arrays"),
+        ([{"path": "[]"}], "valid DLNA title paths"),
+        ([{"path": '["https://example.invalid/show"]'}], "valid DLNA title paths"),
+        ([{"path": ' ["Video","TV Shows"]'}], "outer whitespace"),
+        ([{"path": '["Video"]', "extra": True}], "only path"),
+        (
+            [
+                {"path": '["Video","TV Shows","Example Show"]'},
+                {"path": '["Video","TV Shows","Example Show"]'},
+            ],
+            "unique",
+        ),
+    ],
+)
+def test_library_folders_fail_closed(
+    tmp_path: Path, library_folders: object, message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _settings(tmp_path, library_folders=library_folders)
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -170,6 +213,8 @@ def test_manifest_does_not_expose_inert_plex_options() -> None:
     assert "image: ghcr.io/jpinz/bedside-audio" in manifest
     assert 'io.hass.version="0.7.0"' in dockerfile
     assert pyproject["project"]["version"] == "0.7.0"
+    assert "library_folders: []" in manifest
+    assert 'path: "str(1,1024)"' in manifest
     assert "playlists: []" in manifest
     assert 'name: "str(1,64)"' in manifest
     assert 'items: "str(1,8192)"' in manifest

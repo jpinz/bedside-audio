@@ -7,6 +7,8 @@ from pathlib import Path
 import uvicorn
 
 from .config import (
+    MAX_LIBRARY_FOLDERS,
+    MAX_LIBRARY_PATH_TEXT_LENGTH,
     MAX_PLAYLIST_ITEM_TEXT_LENGTH,
     MAX_PLAYLIST_ITEMS,
     MAX_PLAYLISTS,
@@ -16,6 +18,43 @@ from .config import (
     Settings,
     VoiceSettings,
 )
+
+
+def _parse_library_folders(value: object) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(value, list) or len(value) > MAX_LIBRARY_FOLDERS:
+        raise ValueError(
+            f"library_folders must be a list with at most "
+            f"{MAX_LIBRARY_FOLDERS} entries",
+        )
+    folders: list[tuple[str, ...]] = []
+    for record in value:
+        if not isinstance(record, dict) or set(record) != {"path"}:
+            raise ValueError("Each library folder must contain only path")
+        path_text = record["path"]
+        if (
+            not isinstance(path_text, str)
+            or not 1 <= len(path_text) <= MAX_LIBRARY_PATH_TEXT_LENGTH
+        ):
+            raise ValueError(
+                f"Library folder paths must be 1 to "
+                f"{MAX_LIBRARY_PATH_TEXT_LENGTH} characters",
+            )
+        if path_text != path_text.strip():
+            raise ValueError("Library folder paths cannot have outer whitespace")
+        try:
+            path = json.loads(path_text)
+        except ValueError as exc:
+            raise ValueError(
+                "Library folder paths must be JSON arrays of DLNA titles",
+            ) from exc
+        if not isinstance(path, list) or any(
+            not isinstance(part, str) for part in path
+        ):
+            raise ValueError(
+                "Library folder paths must be JSON arrays of DLNA titles",
+            )
+        folders.append(tuple(path))
+    return tuple(folders)
 
 
 def _parse_playlists(value: object) -> tuple[PlaylistSettings, ...]:
@@ -73,7 +112,7 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
         "dlna_owner_user_id", "plex_networks", "plex_ports",
         "plex_allow_http", "plex_auth_mode", "ha_allow_http_link",
         "ha_http_link_origin",
-        "playlists",
+        "library_folders", "playlists",
         "voice_button_event_entity", "voice_assist_satellite_entity",
         "voice_led_light_entity", "voice_led_select_entity",
         "voice_volume_cap_number_entity",
@@ -87,7 +126,13 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
     source_id = options.get("dlna_source_id", "")
     browse_player = options.get("dlna_browse_player_entity_id", "")
     owner_user_id = options.get("dlna_owner_user_id", "")
-    dlna = DlnaSettings(source_id, browse_player, owner_user_id or None)
+    allowed_folders = _parse_library_folders(options.get("library_folders", []))
+    dlna = DlnaSettings(
+        source_id,
+        browse_player,
+        owner_user_id or None,
+        allowed_folders,
+    )
     max_volume = options["max_volume"]
     if type(max_volume) is not int or not 1 <= max_volume <= 50:
         raise ValueError("max_volume must be an integer from 1 to 50")

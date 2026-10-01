@@ -15,6 +15,7 @@ options:
   dlna_source_id: ""
   dlna_browse_player_entity_id: ""
   dlna_owner_user_id: ""
+  library_folders: []
   max_volume: 50
   playlists: []
   voice_button_event_entity: ""
@@ -27,6 +28,8 @@ schema:
   dlna_source_id: str
   dlna_browse_player_entity_id: str
   dlna_owner_user_id: str
+  library_folders:
+    - path: "str(1,1024)"
   max_volume: "int(1,50)"
   playlists:
     - name: "str(1,64)"

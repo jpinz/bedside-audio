@@ -56,6 +56,7 @@ class _Node:
     media_id: str
     media_type: str
     name: str
+    title_path: tuple[str, ...]
     kind: Literal["folder", "file"]
     display_path: str
     parent_handle: str | None
@@ -79,6 +80,7 @@ class DlnaCatalog:
         self._id_prefix = f"media-source://dlna_dms/{settings.source_id}/:"
         self._root_id = f"{self._id_prefix}0"
         self._browser = browser
+        self._allowed_folders = settings.allowed_folders
         self._lock = RLock()
         self._handles: OrderedDict[str, _Node] = OrderedDict()
         self._last_error: str | None = None
@@ -88,6 +90,7 @@ class DlnaCatalog:
             self._root_id,
             _ROOT_TYPE,
             "DLNA",
+            (),
             "folder",
             "DLNA",
             None,
@@ -198,6 +201,7 @@ class DlnaCatalog:
             selected.parent_id,
             selected.parent_type,
             "",
+            selected.title_path[:-1],
             "folder",
             selected.parent_display_path,
             None,
@@ -392,6 +396,7 @@ class DlnaCatalog:
                     media_id,
                     media_type,
                     name,
+                    parent.title_path + (name,),
                     kind,
                     f"{parent.display_path} / {name}",
                     parent_handle,
@@ -401,7 +406,38 @@ class DlnaCatalog:
                     ordinal,
                 )
             )
-        return nodes
+        return self._filter_nodes(parent, nodes)
+
+    def _filter_nodes(self, parent: _Node, nodes: list[_Node]) -> list[_Node]:
+        if not self._allowed_folders:
+            return nodes
+        parent_path = parent.title_path
+        if any(
+            len(path) <= len(parent_path)
+            and parent_path[:len(path)] == path
+            for path in self._allowed_folders
+        ):
+            return nodes
+        next_names = {
+            path[len(parent_path)]
+            for path in self._allowed_folders
+            if (
+                len(path) > len(parent_path)
+                and path[:len(parent_path)] == parent_path
+            )
+        }
+        filtered = [node for node in nodes if node.name in next_names]
+        for name in next_names:
+            matches = [node for node in filtered if node.name == name]
+            if len(matches) > 1:
+                raise MediaError(
+                    f"Configured library folder is ambiguous at {name!r}",
+                )
+            if matches and matches[0].kind != "folder":
+                raise MediaError(
+                    f"Configured library folder is not a folder at {name!r}",
+                )
+        return filtered
 
     @staticmethod
     def _safe_name(value: object) -> bool:

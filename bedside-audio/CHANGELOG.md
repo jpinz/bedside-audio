@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an optional exact-path library allowlist that preserves only configured
+  show folders, their ancestors and their descendants.
 - Keep the hardware bridge reconnecting with a 30-second maximum backoff and
   reset the budget after an authenticated Core WebSocket session.
 - Advance Bedside-owned queues after confirmed Voice playback settles to

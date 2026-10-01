@@ -91,6 +91,7 @@ responses to avoid running stale JavaScript through Ingress.
 | `dlna_source_id` | Exact HA `dlna_dms` source ID, for example `plex_media_server_example`; never a URL or browser-provided ID. |
 | `dlna_browse_player_entity_id` | Exact video-capable HA media player used for read-only browsing, for example `media_player.example_tv`; it must differ from the Voice player. |
 | `dlna_owner_user_id` | Trusted HA Ingress user ID, required on a fresh install. On an upgrade it may be blank only when a valid legacy owner record supplies the same HA user ID. |
+| `library_folders` | Optional allowlist of exact DLNA folder title paths. The default empty list exposes the full video library. |
 | `max_volume` | Voice cap from 1 to 50 percent; default is 50. Startup and saved volume remain at their existing value (15 on a fresh install) unless that value exceeds the configured cap. Do not raise Voice volume for a test. |
 | `playlists` | Optional list of configured playlists. Each record has a unique `name` and a multiline `items` string as documented below. The default empty list preserves the previous interface and behavior. |
 | `voice_button_event_entity` | Optional exact Voice PE `event.*` entity. Leave blank unless the complete hardware bridge is configured. |
@@ -102,9 +103,27 @@ responses to avoid running stale JavaScript through Ingress.
 ### Custom playlist options
 
 Supervisor app schemas support nested arrays and dictionaries only to a depth
-of two. Bedside therefore keeps each playlist's ordered item paths in one
-multiline string. Each non-empty line must be a JSON array of exact DLNA
-titles, starting below the configured DLNA source root:
+of two. Each `library_folders` record therefore stores one exact folder path
+as a JSON array of titles:
+
+```yaml
+library_folders:
+  - path: '["Video","TV Shows","<show folder>"]'
+  - path: '["Video","TV Shows","<another show folder>"]'
+```
+
+When the list is non-empty, browsing preserves the source hierarchy but shows
+only the ancestors needed to reach an allowed folder, the allowed folder, and
+everything below it. Sibling libraries, movies and shows remain hidden.
+Configured playlists and shuffle actions use the same allowlist. Missing
+configured paths are simply absent; duplicate matching folder titles or a path
+that resolves to a playable file fail browsing closed with a visible error. An
+installation may configure at most 32 unique folder paths, each with at most 16
+segments.
+
+Bedside keeps each playlist's ordered item paths in one multiline string. Each
+non-empty line must be a JSON array of exact DLNA titles, starting below the
+configured DLNA source root:
 
 ```yaml
 playlists:
@@ -117,10 +136,10 @@ playlists:
       ["TV Shows", "<show folder>", "<episode file>"]
 ```
 
-Replace every placeholder with the exact title shown while browsing the same
-configured DLNA source in Home Assistant. Do not include `DLNA`, `TV library`,
-the source ID, a `media-source://` value, a URL or a filesystem path. JSON
-arrays keep titles containing `/` unambiguous.
+Replace every placeholder in library folders and playlists with the exact title
+shown while browsing the same configured DLNA source in Home Assistant. Do not
+include `DLNA`, `TV library`, the source ID, a `media-source://` value, a URL or
+a filesystem path. JSON arrays keep titles containing `/` unambiguous.
 
 Playlist names are 1 to 64 safe characters and must be unique without relying
 on capitalization differences. An installation may configure at most 16
