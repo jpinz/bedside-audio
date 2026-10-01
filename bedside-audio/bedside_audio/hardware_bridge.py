@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
 from threading import RLock
@@ -13,7 +14,7 @@ import requests
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
-from .config import HardwareBridgeSettings
+from .config import LED_THEME_PAYLOAD_LENGTH, HardwareBridgeSettings
 from .controller import ControlError, PlaybackController
 from .persistence import StateError
 from .player import PlayerError
@@ -25,6 +26,12 @@ _MAX_RECONNECT_BACKOFF_FAILURES = 8
 _MAX_RECONNECT_SECONDS = 30.0
 _MAX_DEDUPLICATION_KEYS = 256
 _CUSTOM_LED_OPTIONS = frozenset({"off", "playing", "paused", "sleeping"})
+_LED_THEME_PAYLOAD = re.compile(
+    r"v1\|#[0-9A-F]{6}@[0-9]{3}"
+    r"\|#[0-9A-F]{6}@[0-9]{3}"
+    r"\|#[0-9A-F]{6}@[0-9]{3}"
+    r"\|#[0-9A-F]{6}@[0-9]{3}",
+)
 
 
 class BridgeProtocolError(RuntimeError):
@@ -52,6 +59,8 @@ class RestActions(Protocol):
 
     async def set_number(self, entity_id: str, value: float) -> None: ...
 
+    async def set_text(self, entity_id: str, value: str) -> None: ...
+
     async def close(self) -> None: ...
 
 
@@ -63,6 +72,8 @@ class CoreRestActions:
         voice_entity: str,
         light_entity: str = "",
         select_entity: str = "",
+        text_entity: str = "",
+        theme_payload: str = "",
         number_entity: str = "",
         session: requests.Session | None = None,
     ) -> None:
@@ -71,6 +82,8 @@ class CoreRestActions:
         self._voice_entity = voice_entity
         self._light_entity = light_entity
         self._select_entity = select_entity
+        self._text_entity = text_entity
+        self._theme_payload = theme_payload
         self._number_entity = number_entity
         self._session = session or requests.Session()
         self._session.trust_env = False
@@ -86,6 +99,7 @@ class CoreRestActions:
             ("light", "turn_on", self._light_entity),
             ("light", "turn_off", self._light_entity),
             ("select", "select_option", self._select_entity),
+            ("text", "set_value", self._text_entity),
             ("number", "set_value", self._number_entity),
         }
         if (domain, service, entity_id) not in allowed or not entity_id:
@@ -174,6 +188,21 @@ class CoreRestActions:
             {"entity_id": entity_id, "value": value},
         )
 
+    async def set_text(self, entity_id: str, value: str) -> None:
+        if (
+            entity_id != self._text_entity
+            or value != self._theme_payload
+            or len(value) != LED_THEME_PAYLOAD_LENGTH
+            or not _LED_THEME_PAYLOAD.fullmatch(value)
+        ):
+            raise ValueError("Voice LED theme text is not allowlisted")
+        await asyncio.to_thread(
+            self._post,
+            "text",
+            "set_value",
+            {"entity_id": entity_id, "value": value},
+        )
+
     async def close(self) -> None:
         await asyncio.to_thread(self._session.close)
 
@@ -200,6 +229,8 @@ class HardwareIntentProcessor:
         }
         if settings.volume_cap_number_entity:
             entities.add(settings.volume_cap_number_entity)
+        if settings.led_theme_text_entity:
+            entities.add(settings.led_theme_text_entity)
         self._entities = frozenset(entities)
         self._output_available = False
         self._assist_idle = False
@@ -208,6 +239,7 @@ class HardwareIntentProcessor:
         self._last_led_display: str | None = None
         self._led_needs_reapply = True
         self._local_led_priority = False
+        self._theme_sync_pending = False
         self._seen: OrderedDict[tuple[object, ...], None] = OrderedDict()
 
     @property
@@ -217,10 +249,12 @@ class HardwareIntentProcessor:
             self._settings.button_event_entity,
             self._settings.assist_satellite_entity,
             self._settings.led_entity,
+            self._settings.led_theme_text_entity,
             self._settings.volume_cap_number_entity,
         )))
 
     async def reconcile_snapshot(self, states: Iterable[object]) -> None:
+        self._theme_sync_pending = False
         exact: dict[str, dict[str, object]] = {}
         for value in states:
             if not isinstance(value, dict):
@@ -289,6 +323,8 @@ class HardwareIntentProcessor:
                 self._local_led_priority = True
                 self._led_needs_reapply = True
             return
+        elif entity_id == self._settings.led_theme_text_entity:
+            await self._sync_led_theme(state, attributes)
         elif entity_id == self._settings.volume_cap_number_entity:
             await self._sync_volume_cap_number(state, attributes)
         await self._reconcile_led()
@@ -371,6 +407,30 @@ class HardwareIntentProcessor:
         await self._rest.set_number(
             self._settings.volume_cap_number_entity, target,
         )
+
+    async def _sync_led_theme(
+        self, state: str, attributes: dict[str, object],
+    ) -> None:
+        if (
+            attributes.get("min") != LED_THEME_PAYLOAD_LENGTH
+            or attributes.get("max") != LED_THEME_PAYLOAD_LENGTH
+            or attributes.get("mode") != "text"
+        ):
+            raise ValueError("Voice LED theme text contract is invalid")
+        target = self._settings.led_theme.payload
+        if state == target:
+            self._theme_sync_pending = False
+            return
+        if self._theme_sync_pending:
+            return
+        try:
+            await self._rest.set_text(
+                self._settings.led_theme_text_entity, target,
+            )
+        except (CoreActionError, OSError) as exc:
+            logger.warning("Voice LED theme synchronization failed: %s", exc)
+            return
+        self._theme_sync_pending = True
 
     async def _apply_gesture(self, event_type: str) -> None:
         if event_type not in ("single_press", "double_press", "triple_press"):
@@ -473,6 +533,8 @@ class CoreHardwareBridge:
             voice_entity=voice_entity,
             light_entity=settings.led_light_entity,
             select_entity=settings.led_select_entity,
+            text_entity=settings.led_theme_text_entity,
+            theme_payload=settings.led_theme.payload,
             number_entity=settings.volume_cap_number_entity,
         )
         self._processor = HardwareIntentProcessor(

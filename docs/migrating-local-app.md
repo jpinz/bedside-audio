@@ -15,7 +15,9 @@ Before installing the repository App:
 3. Keep the local App stopped while evaluating a separately configured
    repository App. Do not run both against the same Voice media player.
 4. Configure the repository App with the intended owner, DLNA source, browse
-   player, volume cap, playlists, and optional Voice bridge entities.
+   player, volume cap, playlists, LED styles, and optional Voice bridge
+   entities. Leave `voice_led_theme_text_entity` blank until custom firmware
+   `26.9.0-bedside.5` is installed and its exact text entity is visible.
 5. Verify signed-in owner access and read-only library browsing before any
    playback test. Playback, timer, firmware, and cleanup tests require their
    own operator approval.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import uvicorn
@@ -16,10 +17,19 @@ from .config import (
     MAX_PLAYLISTS,
     DlnaSettings,
     HardwareBridgeSettings,
+    LedStyle,
+    LedTheme,
     PlaylistSettings,
     Settings,
     VoiceSettings,
 )
+
+_LED_STYLE_DEFAULTS = {
+    "playing": ("#00FF30", 12),
+    "paused": ("#FF7000", 18),
+    "sleeping": ("#6000A0", 8),
+    "button_press": ("#18BBF2", 10),
+}
 
 
 def _parse_library_exclude_patterns(value: object) -> tuple[str, ...]:
@@ -124,6 +134,31 @@ def _parse_playlists(value: object) -> tuple[PlaylistSettings, ...]:
     return tuple(playlists)
 
 
+def _parse_led_theme(options: dict[str, object]) -> LedTheme:
+    styles: dict[str, LedStyle] = {}
+    for name, (default_color, default_brightness) in _LED_STYLE_DEFAULTS.items():
+        color_field = f"led_{name}_color"
+        brightness_field = f"led_{name}_brightness"
+        color = options.get(color_field, default_color)
+        brightness = options.get(brightness_field, default_brightness)
+        if (
+            not isinstance(color, str)
+            or not re.fullmatch(r"#[0-9A-F]{6}", color)
+        ):
+            raise ValueError(f"{color_field} must use canonical #RRGGBB")
+        if type(brightness) is not int or not 1 <= brightness <= 100:
+            raise ValueError(
+                f"{brightness_field} must be an integer from 1 to 100",
+            )
+        styles[name] = LedStyle(color, brightness)
+    return LedTheme(
+        playing=styles["playing"],
+        paused=styles["paused"],
+        sleeping=styles["sleeping"],
+        button_press=styles["button_press"],
+    )
+
+
 def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
     try:
         options = json.loads(path.read_text(encoding="utf-8"))
@@ -142,7 +177,12 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
         "library_exclude_patterns", "library_folders", "playlists",
         "voice_button_event_entity", "voice_assist_satellite_entity",
         "voice_led_light_entity", "voice_led_select_entity",
+        "voice_led_theme_text_entity",
         "voice_volume_cap_number_entity",
+        "led_playing_color", "led_playing_brightness",
+        "led_paused_color", "led_paused_brightness",
+        "led_sleeping_color", "led_sleeping_brightness",
+        "led_button_press_color", "led_button_press_brightness",
     }
     if not required <= set(options) or not set(options) <= required | optional:
         raise ValueError("Home Assistant app options are missing or unrecognized")
@@ -168,14 +208,17 @@ def settings_from_options(path: Path = Path("/data/options.json")) -> Settings:
     if type(max_volume) is not int or not 1 <= max_volume <= 50:
         raise ValueError("max_volume must be an integer from 1 to 50")
     voice = VoiceSettings(options["media_player_entity"], max_volume=max_volume)
+    led_theme = _parse_led_theme(options)
     hardware = HardwareBridgeSettings(
         button_event_entity=options.get("voice_button_event_entity", ""),
         assist_satellite_entity=options.get("voice_assist_satellite_entity", ""),
         led_light_entity=options.get("voice_led_light_entity", ""),
         led_select_entity=options.get("voice_led_select_entity", ""),
+        led_theme_text_entity=options.get("voice_led_theme_text_entity", ""),
         volume_cap_number_entity=options.get(
             "voice_volume_cap_number_entity", "",
         ),
+        led_theme=led_theme,
     )
     playlists = _parse_playlists(options.get("playlists", []))
     return Settings(

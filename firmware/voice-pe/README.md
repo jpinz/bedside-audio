@@ -2,7 +2,7 @@
 
 This directory contains a standalone custom firmware configuration for the
 standard 16 MB Home Assistant Voice Preview Edition. It is a thin hardware
-adapter for Bedside Audio v0.6. `PlaybackController` remains authoritative for
+adapter for Bedside Audio v0.8. `PlaybackController` remains authoritative for
 the queue, timers, provenance, the 10-second previous-or-restart rule, and
 transport policy.
 
@@ -34,12 +34,28 @@ The firmware exposes:
   `paused`, and `sleeping`. It boots to `off` and does not restore stale state.
 - `number.<device>_bedside_volume_cap`, bounded from `0.0` through `0.50`,
   stepping by `0.05`. It boots to `0.50` and does not restore stale state.
+- `text.<device>_bedside_led_theme`, a fixed 50-character versioned payload
+  carrying the playing, paused, sleeping, and shared button-press color and
+  brightness styles.
 
-Configure the first two entities through the existing Bedside hardware bridge
-options. Configure the number entity through
+Configure the event and select entities through the existing Bedside hardware
+bridge options. Configure the number entity through
 `voice_volume_cap_number_entity`; the app then synchronizes the number to its
-`max_volume` option. Leaving that new option blank preserves v0.6 behavior and
+`max_volume` option. Leaving that option blank preserves earlier behavior and
 the firmware keeps its safe 50 percent default.
+
+After this firmware is installed, configure its exact text entity through
+`voice_led_theme_text_entity`. The App sends one payload in this format:
+
+```text
+v1|#RRGGBB@PPP|#RRGGBB@PPP|#RRGGBB@PPP|#RRGGBB@PPP
+```
+
+The fields are playing, paused, sleeping, and button press. The firmware
+requires the exact length, uppercase canonical hex colors, separators, and
+brightness from `001` through `100`. It validates all four styles before
+assigning any of them, persists only the complete valid payload, and otherwise
+keeps the last valid theme or built-in defaults.
 
 Single press first stops a ringing Voice timer, an active Assist run, or an
 announcement. With Bedside intent `playing` or `paused`, it emits
@@ -57,9 +73,14 @@ Bedside still observes volume and may correct external calls.
 
 Bedside LED effects use all 12 internal pixels:
 
-- `playing`: dim clockwise moving green.
-- `paused`: static four-point amber.
-- `sleeping`: very dim violet breathing.
+- `playing`: clockwise moving `#00FF30` at 12 percent by default.
+- `paused`: static four-point `#FF7000` at 18 percent by default.
+- `sleeping`: breathing `#6000A0` at 8 percent by default.
+- physical button press: full-ring `#18BBF2` at 10 percent by default.
+
+The shared button style is active only while the physical center button is
+held. Release returns through the existing LED reducer. It does not create
+separate single, double, or triple gesture feedback.
 
 They run only at the final normal-idle tier. Voice-kit startup failure,
 provisioning/startup, no HA connection, button, jack, dial, ringing timer,
@@ -72,7 +93,15 @@ intent until the app reports stopped or idle as `sleeping`.
 Initial publication of the Bedside number and select routes through one
 restart-mode deferred refresh. This coalesces their setup callbacks, waits
 until addressable-light setup has completed, and then renders the current
-intent without changing the LED priority reducer.
+intent without changing the LED priority reducer. The restored theme is
+strictly parsed before that render; the text entity publishes only the valid
+stored or default payload.
+
+For upgrades, update the App to `0.8.0` with the theme entity blank, install
+firmware `26.9.0-bedside.5` through the separately approved operator process,
+confirm the exact new `text.*` entity ID in Home Assistant, then add that ID to
+the App options. Firmware-first upgrades are also safe because earlier App
+versions ignore the text entity.
 
 ## First-flash provisioning
 
@@ -112,7 +141,15 @@ does not add ESPHome as an app runtime dependency.
 
 ## Recorded validation
 
-On 2026-09-29, the configuration validated and compiled with:
+On 2026-09-30, firmware `26.9.0-bedside.5` passed both `esphome config` and
+`esphome compile` with ESPHome 2026.9.1, ESP-IDF 5.5.5, and a temporary
+non-deployable API/OTA key used only for secret-free build validation. It did
+not connect to Home Assistant or hardware. ESPHome reported config hash
+`0x357752e4`, 3,194,747 bytes of image content, 51.1 percent DIRAM use, and
+39.3 percent app-partition use. The generated binaries remain ignored and
+must not be flashed because the validation key is not an operator key.
+
+The previous `26.9.0-bedside.4` build was validated on 2026-09-29 with:
 
 ```sh
 uvx --python 3.12 --from 'esphome==2026.9.1' \
