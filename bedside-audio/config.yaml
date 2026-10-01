@@ -1,6 +1,6 @@
 name: Bedside audio (Voice)
 description: Television audio on Home Assistant Voice Preview Edition
-version: "0.8.0"
+version: "0.9.0"
 slug: bedside_audio
 url: https://github.com/jpinz/bedside-audio
 image: ghcr.io/jpinz/bedside-audio

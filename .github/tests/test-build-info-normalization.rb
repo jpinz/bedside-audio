@@ -16,7 +16,7 @@ quoted_outputs = {
   "${{ steps.info.outputs.image }}" => '"ghcr.io/jpinz/bedside-audio"',
   "${{ steps.info.outputs.name }}" => '"Bedside audio (Voice)"',
   "${{ steps.info.outputs.url }}" => '"https://github.com/jpinz/bedside-audio"',
-  "${{ steps.info.outputs.version }}" => '"0.8.0"',
+  "${{ steps.info.outputs.version }}" => '"0.9.0"',
 }
 
 environment = (step["env"] || {}).to_h do |name, value|
@@ -43,7 +43,7 @@ Tempfile.create("builder-output") do |output|
   expected = {
     "image_name" => "bedside-audio",
     "registry_prefix" => "ghcr.io/jpinz",
-    "version" => "0.8.0",
+    "version" => "0.9.0",
   }
   actual = values.slice(*expected.keys)
   abort "expected #{expected.inspect}, got #{actual.inspect}" unless actual == expected

@@ -300,10 +300,10 @@ def test_manifest_does_not_expose_inert_plex_options() -> None:
     assert "ha_http_link_origin:" not in manifest
     assert "max_volume: 50" in manifest
     assert "max_volume: \"int(1,50)\"" in manifest
-    assert 'version: "0.8.0"' in manifest
+    assert 'version: "0.9.0"' in manifest
     assert "image: ghcr.io/jpinz/bedside-audio" in manifest
-    assert 'io.hass.version="0.8.0"' in dockerfile
-    assert pyproject["project"]["version"] == "0.8.0"
+    assert 'io.hass.version="0.9.0"' in dockerfile
+    assert pyproject["project"]["version"] == "0.9.0"
     assert "library_exclude_patterns: []" in manifest
     assert 'pattern: "str(1,256)"' in manifest
     assert "library_folders: []" in manifest
