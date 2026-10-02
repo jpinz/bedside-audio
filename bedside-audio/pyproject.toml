@@ -4,14 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bedside-audio"
-version = "0.10.0"
-description = "Home Assistant OS television audio remote for Voice Preview Edition"
+version = "0.11.0"
+description = "Music Assistant hardware controls for Home Assistant Voice Preview Edition"
 readme = "DOCS.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115,<1",
     "requests>=2.32,<3",
-    "uvicorn>=0.30,<1",
     "websockets>=15,<17",
 ]
 
@@ -23,9 +21,6 @@ test = [
 
 [tool.setuptools.packages.find]
 include = ["bedside_audio*"]
-
-[tool.setuptools.package-data]
-bedside_audio = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

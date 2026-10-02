@@ -83,9 +83,13 @@ def test_firmware_button_contract_keeps_local_precedence_and_event_only_queue() 
     assert "media_player.next" not in source
     assert "media_player.previous" not in source
     assert "restart_current" not in source
-    assert "position > 10" in (
+    bridge = (
         ROOT / "bedside-audio" / "bedside_audio" / "hardware_bridge.py"
     ).read_text(encoding="utf-8")
+    assert '"media_next_track"' in bridge
+    assert '"media_previous_track"' in bridge
+    assert '"media_seek"' in bridge
+    assert "> 10.0" in bridge
 
 
 def test_firmware_select_number_and_dial_are_fail_safe() -> None:

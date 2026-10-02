@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.11.0
+
+- Replace the DLNA browser and playback application with a headless Music
+  Assistant hardware bridge.
+- Route single, double, and triple Voice PE gestures to the configured Music
+  Assistant media-player entity.
+- Preserve Assist priority, LED state arbitration, custom LED themes, and the
+  native Voice volume cap.
+- Remove Ingress, ownership, playlists, queue state, sleep timers, DLNA
+  browsing, and app-managed playback.
+- Accept the previous native `media_player_entity` option as a temporary
+  migration fallback for `voice_media_player_entity`.
+
 ## 0.10.0
 
 - Add an optional exact DLNA root folder so library browsing can begin at its
