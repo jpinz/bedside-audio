@@ -1,6 +1,6 @@
 name: Bedside hardware (Music Assistant)
 description: Voice PE hardware controls for a Music Assistant player
-version: "0.11.0"
+version: "0.11.1"
 slug: bedside_audio
 url: https://github.com/jpinz/bedside-audio
 image: ghcr.io/jpinz/bedside-audio

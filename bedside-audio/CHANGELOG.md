@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.11.1
+
+- Keep a loaded Music Assistant queue resumable when the underlying Voice PE
+  reports a paused player as `idle`, preventing the next center-button press
+  from starting Assist instead of resuming playback.
+
 ## 0.11.0
 
 - Replace the DLNA browser and playback application with a headless Music

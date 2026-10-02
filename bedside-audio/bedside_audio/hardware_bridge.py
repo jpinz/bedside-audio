@@ -361,6 +361,18 @@ class HardwareIntentProcessor:
     def _observe_playback(
         self, state: str, attributes: dict[str, object],
     ) -> None:
+        active_queue = attributes.get("active_queue")
+        media_content_id = attributes.get("media_content_id")
+        if (
+            state == "idle"
+            and isinstance(active_queue, str)
+            and bool(active_queue)
+            and isinstance(media_content_id, str)
+            and bool(media_content_id)
+        ):
+            # Music Assistant can expose a paused ESPHome player as idle while
+            # retaining its active queue and current media.
+            state = "paused"
         previous_state = self._playback_state
         self._playback_state = state
         self._playback_available = state not in ("off", "unknown", "unavailable")

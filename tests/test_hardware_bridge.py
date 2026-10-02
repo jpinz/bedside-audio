@@ -188,6 +188,46 @@ def test_button_contract_controls_music_assistant_player() -> None:
     ]
 
 
+def test_idle_music_assistant_queue_remains_resumable() -> None:
+    rest = FakeRest()
+    processor = HardwareIntentProcessor(_settings(custom=True), rest)
+
+    async def exercise() -> None:
+        await _ready(processor)
+        await processor.process_state(
+            _BUTTON,
+            "first",
+            {"event_type": "single_press"},
+            live=True,
+            event_key="pause",
+        )
+        await processor.process_state(
+            _MA,
+            "idle",
+            {
+                "active_queue": "bedside-queue",
+                "media_content_id": "library://podcast_episode/1",
+                "media_title": "Episode",
+            },
+            live=True,
+            event_key="music-assistant-idle",
+        )
+        await processor.process_state(
+            _BUTTON,
+            "second",
+            {"event_type": "single_press"},
+            live=True,
+            event_key="resume",
+        )
+
+    _run(exercise())
+    assert ("select", _SELECT, "paused") in rest.calls
+    assert _player_calls(rest) == [
+        ("media_play_pause", None),
+        ("media_play_pause", None),
+    ]
+
+
 def test_gestures_fail_closed_during_assist_or_without_active_playback() -> None:
     rest = FakeRest()
     processor = HardwareIntentProcessor(_settings(), rest)
