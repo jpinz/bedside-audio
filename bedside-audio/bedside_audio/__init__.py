@@ -1,1 +1,1 @@
-"""Home Assistant Ingress remote for DLNA audio on Voice Preview Edition."""
+"""Music Assistant hardware controls for Home Assistant Voice Preview Edition."""

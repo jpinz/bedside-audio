@@ -1,6 +1,6 @@
-name: Bedside audio (Voice)
-description: Television audio on Home Assistant Voice Preview Edition
-version: "0.10.0"
+name: Bedside hardware (Music Assistant)
+description: Voice PE hardware controls for a Music Assistant player
+version: "0.11.0"
 slug: bedside_audio
 url: https://github.com/jpinz/bedside-audio
 image: ghcr.io/jpinz/bedside-audio
@@ -8,16 +8,10 @@ arch:
   - aarch64
   - amd64
 stage: experimental
-ingress: true
 homeassistant_api: true
 options:
-  media_player_entity: null
-  dlna_source_id: ""
-  dlna_browse_player_entity_id: ""
-  dlna_owner_user_id: ""
-  library_exclude_patterns: []
-  library_folders: []
-  library_root_folder: ""
+  music_assistant_player_entity: null
+  voice_media_player_entity: null
   max_volume: 50
   led_playing_color: "#00FF30"
   led_playing_brightness: 12
@@ -27,7 +21,6 @@ options:
   led_sleeping_brightness: 8
   led_button_press_color: "#18BBF2"
   led_button_press_brightness: 10
-  playlists: []
   voice_button_event_entity: ""
   voice_assist_satellite_entity: ""
   voice_led_light_entity: ""
@@ -35,15 +28,8 @@ options:
   voice_led_theme_text_entity: ""
   voice_volume_cap_number_entity: ""
 schema:
-  media_player_entity: str
-  dlna_source_id: str
-  dlna_browse_player_entity_id: str
-  dlna_owner_user_id: str
-  library_exclude_patterns:
-    - pattern: "str(1,256)"
-  library_folders:
-    - path: "str(1,1024)"
-  library_root_folder: str
+  music_assistant_player_entity: str
+  voice_media_player_entity: str
   max_volume: "int(1,50)"
   led_playing_color: str
   led_playing_brightness: "int(1,100)"
@@ -53,9 +39,6 @@ schema:
   led_sleeping_brightness: "int(1,100)"
   led_button_press_color: str
   led_button_press_brightness: "int(1,100)"
-  playlists:
-    - name: "str(1,64)"
-      items: "str(1,8192)"
   voice_button_event_entity: str
   voice_assist_satellite_entity: str
   voice_led_light_entity: str

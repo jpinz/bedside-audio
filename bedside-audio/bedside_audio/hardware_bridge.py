@@ -5,19 +5,18 @@ import json
 import logging
 import os
 import re
+import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import AbstractAsyncContextManager
 from threading import RLock
-from typing import AsyncContextManager, Protocol
+from typing import Protocol
 
 import requests
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
-from .config import LED_THEME_PAYLOAD_LENGTH, HardwareBridgeSettings
-from .controller import ControlError, PlaybackController
-from .persistence import StateError
-from .player import PlayerError
+from .config import LED_THEME_PAYLOAD_LENGTH, Settings
 
 logger = logging.getLogger(__name__)
 _CORE_WS = "ws://supervisor/core/websocket"
@@ -26,6 +25,12 @@ _MAX_RECONNECT_BACKOFF_FAILURES = 8
 _MAX_RECONNECT_SECONDS = 30.0
 _MAX_DEDUPLICATION_KEYS = 256
 _CUSTOM_LED_OPTIONS = frozenset({"off", "playing", "paused", "sleeping"})
+_PLAYER_ACTIONS = frozenset({
+    "media_play_pause",
+    "media_next_track",
+    "media_previous_track",
+    "media_seek",
+})
 _LED_THEME_PAYLOAD = re.compile(
     r"v1\|#[0-9A-F]{6}@[0-9]{3}"
     r"\|#[0-9A-F]{6}@[0-9]{3}"
@@ -51,6 +56,14 @@ class WebSocketConnection(Protocol):
 
 
 class RestActions(Protocol):
+    async def control_player(
+        self,
+        entity_id: str,
+        action: str,
+        *,
+        seek_position: float | None = None,
+    ) -> None: ...
+
     async def correct_volume(self, entity_id: str, volume_level: float) -> None: ...
 
     async def set_light(self, entity_id: str, display: str) -> None: ...
@@ -68,23 +81,13 @@ class CoreRestActions:
     def __init__(
         self,
         token: str,
+        settings: Settings,
         *,
-        voice_entity: str,
-        light_entity: str = "",
-        select_entity: str = "",
-        text_entity: str = "",
-        theme_payload: str = "",
-        number_entity: str = "",
         session: requests.Session | None = None,
     ) -> None:
         if not token:
             raise ValueError("Home Assistant Supervisor token is unavailable")
-        self._voice_entity = voice_entity
-        self._light_entity = light_entity
-        self._select_entity = select_entity
-        self._text_entity = text_entity
-        self._theme_payload = theme_payload
-        self._number_entity = number_entity
+        self._settings = settings
         self._session = session or requests.Session()
         self._session.trust_env = False
         self._session.headers.update({
@@ -94,13 +97,22 @@ class CoreRestActions:
 
     def _post(self, domain: str, service: str, body: dict[str, object]) -> None:
         entity_id = body.get("entity_id")
+        hardware = self._settings.hardware
         allowed = {
-            ("media_player", "volume_set", self._voice_entity),
-            ("light", "turn_on", self._light_entity),
-            ("light", "turn_off", self._light_entity),
-            ("select", "select_option", self._select_entity),
-            ("text", "set_value", self._text_entity),
-            ("number", "set_value", self._number_entity),
+            *(
+                ("media_player", action, self._settings.music_assistant_player_entity)
+                for action in _PLAYER_ACTIONS
+            ),
+            (
+                "media_player",
+                "volume_set",
+                self._settings.voice_media_player_entity,
+            ),
+            ("light", "turn_on", hardware.led_light_entity),
+            ("light", "turn_off", hardware.led_light_entity),
+            ("select", "select_option", hardware.led_select_entity),
+            ("text", "set_value", hardware.led_theme_text_entity),
+            ("number", "set_value", hardware.volume_cap_number_entity),
         }
         if (domain, service, entity_id) not in allowed or not entity_id:
             raise ValueError("Home Assistant Core action is not allowlisted")
@@ -118,7 +130,7 @@ class CoreRestActions:
         try:
             if not 200 <= response.status_code < 300:
                 raise CoreActionError(
-                    f"Home Assistant Core rejected an allowlisted action "
+                    "Home Assistant Core rejected an allowlisted action "
                     f"(HTTP {response.status_code})"
                 )
             try:
@@ -132,8 +144,31 @@ class CoreRestActions:
         finally:
             response.close()
 
+    async def control_player(
+        self,
+        entity_id: str,
+        action: str,
+        *,
+        seek_position: float | None = None,
+    ) -> None:
+        if (
+            entity_id != self._settings.music_assistant_player_entity
+            or action not in _PLAYER_ACTIONS
+            or (action == "media_seek") != (seek_position is not None)
+        ):
+            raise ValueError("Music Assistant player action is not allowlisted")
+        body: dict[str, object] = {"entity_id": entity_id}
+        if seek_position is not None:
+            if not isinstance(seek_position, float) or seek_position < 0:
+                raise ValueError("Music Assistant seek position is invalid")
+            body["seek_position"] = seek_position
+        await asyncio.to_thread(self._post, "media_player", action, body)
+
     async def correct_volume(self, entity_id: str, volume_level: float) -> None:
-        if entity_id != self._voice_entity or not 0.0 <= volume_level <= 0.5:
+        if (
+            entity_id != self._settings.voice_media_player_entity
+            or not 0.0 <= volume_level <= 0.5
+        ):
             raise ValueError("Voice volume correction is not allowlisted")
         await asyncio.to_thread(
             self._post,
@@ -143,29 +178,31 @@ class CoreRestActions:
         )
 
     async def set_light(self, entity_id: str, display: str) -> None:
-        if entity_id != self._light_entity:
+        hardware = self._settings.hardware
+        if entity_id != hardware.led_light_entity:
             raise ValueError("Voice LED light is not allowlisted")
         if display == "off":
             await asyncio.to_thread(
                 self._post, "light", "turn_off", {"entity_id": entity_id},
             )
             return
-        styles = {
-            "playing": {"rgb_color": [0, 96, 255], "brightness": 64},
-            "paused": {"rgb_color": [255, 128, 0], "brightness": 48},
-            "sleeping": {"rgb_color": [32, 8, 0], "brightness": 8},
-        }
-        if display not in styles:
-            raise ValueError("Voice LED display is not supported")
+        style = hardware.led_theme.display_style(display)
         await asyncio.to_thread(
             self._post,
             "light",
             "turn_on",
-            {"entity_id": entity_id, **styles[display]},
+            {
+                "entity_id": entity_id,
+                "rgb_color": style.rgb_color,
+                "brightness_pct": style.brightness,
+            },
         )
 
     async def set_select(self, entity_id: str, option: str) -> None:
-        if entity_id != self._select_entity or option not in _CUSTOM_LED_OPTIONS:
+        if (
+            entity_id != self._settings.hardware.led_select_entity
+            or option not in _CUSTOM_LED_OPTIONS
+        ):
             raise ValueError("Voice LED select option is not allowlisted")
         await asyncio.to_thread(
             self._post,
@@ -176,7 +213,7 @@ class CoreRestActions:
 
     async def set_number(self, entity_id: str, value: float) -> None:
         if (
-            entity_id != self._number_entity
+            entity_id != self._settings.hardware.volume_cap_number_entity
             or not isinstance(value, float)
             or not 0.0 <= value <= 0.5
         ):
@@ -190,8 +227,8 @@ class CoreRestActions:
 
     async def set_text(self, entity_id: str, value: str) -> None:
         if (
-            entity_id != self._text_entity
-            or value != self._theme_payload
+            entity_id != self._settings.hardware.led_theme_text_entity
+            or value != self._settings.hardware.led_theme.payload
             or len(value) != LED_THEME_PAYLOAD_LENGTH
             or not _LED_THEME_PAYLOAD.fullmatch(value)
         ):
@@ -210,29 +247,20 @@ class CoreRestActions:
 class HardwareIntentProcessor:
     def __init__(
         self,
-        settings: HardwareBridgeSettings,
-        voice_entity: str,
-        controller: PlaybackController,
+        settings: Settings,
         rest: RestActions,
+        *,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if not settings.enabled:
-            raise ValueError(settings.disabled_reason or "Hardware bridge is disabled")
         self._settings = settings
-        self._voice_entity = voice_entity
-        self._controller = controller
+        self._hardware = settings.hardware
         self._rest = rest
-        entities = {
-            voice_entity,
-            settings.button_event_entity,
-            settings.assist_satellite_entity,
-            settings.led_entity,
-        }
-        if settings.volume_cap_number_entity:
-            entities.add(settings.volume_cap_number_entity)
-        if settings.led_theme_text_entity:
-            entities.add(settings.led_theme_text_entity)
-        self._entities = frozenset(entities)
-        self._output_available = False
+        self._clock = clock
+        self._playback_state = "unavailable"
+        self._playback_available = False
+        self._voice_available = False
+        self._position_base: float | None = None
+        self._position_started_at: float | None = None
         self._assist_idle = False
         self._assist_priority = True
         self._last_volume_level: float | None = None
@@ -244,14 +272,16 @@ class HardwareIntentProcessor:
 
     @property
     def entities(self) -> tuple[str, ...]:
-        return tuple(filter(None, (
-            self._voice_entity,
-            self._settings.button_event_entity,
-            self._settings.assist_satellite_entity,
-            self._settings.led_entity,
-            self._settings.led_theme_text_entity,
-            self._settings.volume_cap_number_entity,
-        )))
+        values = (
+            self._settings.music_assistant_player_entity,
+            self._settings.voice_media_player_entity,
+            self._hardware.button_event_entity,
+            self._hardware.assist_satellite_entity,
+            self._hardware.led_entity,
+            self._hardware.led_theme_text_entity,
+            self._hardware.volume_cap_number_entity,
+        )
+        return tuple(dict.fromkeys(value for value in values if value))
 
     async def reconcile_snapshot(self, states: Iterable[object]) -> None:
         self._theme_sync_pending = False
@@ -260,7 +290,7 @@ class HardwareIntentProcessor:
             if not isinstance(value, dict):
                 continue
             entity_id = value.get("entity_id")
-            if entity_id in self._entities:
+            if entity_id in self.entities:
                 exact[str(entity_id)] = value
         for entity_id in self.entities:
             value = exact.get(entity_id)
@@ -288,70 +318,83 @@ class HardwareIntentProcessor:
         live: bool,
         event_key: object,
     ) -> None:
-        if entity_id not in self._entities:
+        if entity_id not in self.entities:
             raise ValueError("Core event entity is not configured")
         event_type = attributes.get("event_type")
         key = (entity_id, state, event_type, event_key)
         if live and self._duplicate(key):
             return
 
-        if entity_id == self._voice_entity:
-            await asyncio.to_thread(
-                self._controller.observe_transport,
-                state,
-                attributes,
-                live=live,
-            )
-            self._output_available = state not in ("off", "unknown", "unavailable")
+        if entity_id == self._settings.music_assistant_player_entity:
+            self._observe_playback(state, attributes)
+        if entity_id == self._settings.voice_media_player_entity:
+            self._voice_available = state not in ("off", "unknown", "unavailable")
             level = attributes.get("volume_level")
-            if self._output_available and isinstance(level, (int, float)):
+            if self._voice_available and isinstance(level, (int, float)):
                 await self._apply_volume(float(level))
-        elif entity_id == self._settings.assist_satellite_entity:
+        if entity_id == self._hardware.assist_satellite_entity:
             was_priority = self._assist_priority
-            muted = attributes.get("microphone_muted") is True or attributes.get("muted") is True
+            muted = (
+                attributes.get("microphone_muted") is True
+                or attributes.get("muted") is True
+            )
             self._assist_idle = state == "idle"
             self._assist_priority = not self._assist_idle or muted
             if self._assist_idle and not muted:
                 self._local_led_priority = False
             if was_priority or self._assist_priority:
                 self._led_needs_reapply = True
-        elif entity_id == self._settings.button_event_entity and live:
+        elif entity_id == self._hardware.button_event_entity and live:
             if isinstance(event_type, str):
                 await self._apply_gesture(event_type)
-        elif entity_id == self._settings.led_entity and live:
+        elif entity_id == self._hardware.led_entity and live:
             if not self._led_event_matches(state, attributes):
                 self._local_led_priority = True
                 self._led_needs_reapply = True
             return
-        elif entity_id == self._settings.led_theme_text_entity:
+        elif entity_id == self._hardware.led_theme_text_entity:
             await self._sync_led_theme(state, attributes)
-        elif entity_id == self._settings.volume_cap_number_entity:
+        elif entity_id == self._hardware.volume_cap_number_entity:
             await self._sync_volume_cap_number(state, attributes)
         await self._reconcile_led()
 
-    async def process_play_media_call(
-        self,
-        service_data: dict[str, object],
-        *,
-        user_id: object,
-        own_user_id: str,
-        event_key: object,
+    def _observe_playback(
+        self, state: str, attributes: dict[str, object],
     ) -> None:
-        target = service_data.get("entity_id")
-        targets_voice = (
-            target == self._voice_entity
-            or isinstance(target, list) and self._voice_entity in target
+        previous_state = self._playback_state
+        self._playback_state = state
+        self._playback_available = state not in ("off", "unknown", "unavailable")
+        raw_position = attributes.get("media_position")
+        position = (
+            float(raw_position)
+            if isinstance(raw_position, (int, float)) and raw_position >= 0
+            else None
         )
-        if not targets_voice:
-            return
-        key = ("play_media", user_id, event_key)
-        if self._duplicate(key):
-            return
-        await asyncio.to_thread(
-            self._controller.observe_play_media,
-            service_data.get("media_content_id"),
-            owned_call=user_id == own_user_id,
-        )
+        if state == "playing":
+            if (
+                previous_state != "playing"
+                or self._position_base is None
+                or position is not None and abs(position - self._position_base) > 0.5
+            ):
+                self._position_base = position
+                self._position_started_at = (
+                    self._clock() if position is not None else None
+                )
+        elif state == "paused":
+            if position is None:
+                position = self._estimated_position()
+            self._position_base = position
+            self._position_started_at = None
+        else:
+            self._position_base = None
+            self._position_started_at = None
+
+    def _estimated_position(self) -> float | None:
+        if self._position_base is None:
+            return None
+        if self._position_started_at is None:
+            return self._position_base
+        return self._position_base + max(0.0, self._clock() - self._position_started_at)
 
     def _duplicate(self, key: tuple[object, ...]) -> bool:
         if key in self._seen:
@@ -365,19 +408,11 @@ class HardwareIntentProcessor:
     async def _apply_volume(self, level: float) -> None:
         if not 0.0 <= level <= 1.0 or level == self._last_volume_level:
             return
-        state = await asyncio.to_thread(self._controller.state)
-        capabilities = state.get("capabilities")
-        if not isinstance(capabilities, dict):
-            return
-        configured_cap = capabilities.get("max_volume")
-        if type(configured_cap) is not int:
-            return
-        cap = min(50, configured_cap)
-        target = min(round(level * 100), cap)
-        if state.get("volume") != target:
-            await asyncio.to_thread(self._controller.set_volume, target)
-        if level * 100 > cap:
-            await self._rest.correct_volume(self._voice_entity, cap / 100)
+        cap = self._settings.max_volume / 100
+        if level > cap:
+            await self._rest.correct_volume(
+                self._settings.voice_media_player_entity, cap,
+            )
         self._last_volume_level = level
 
     async def _sync_volume_cap_number(
@@ -393,19 +428,11 @@ class HardwareIntentProcessor:
             or attributes.get("step") != 0.05
         ):
             raise ValueError("Voice volume cap number contract is invalid")
-        controller_state = await asyncio.to_thread(self._controller.state)
-        capabilities = controller_state.get("capabilities")
-        max_volume = (
-            capabilities.get("max_volume")
-            if isinstance(capabilities, dict) else None
-        )
-        if type(max_volume) is not int:
-            raise ValueError("Controller volume capability is unavailable")
-        target = min(0.5, max_volume / 100)
+        target = self._settings.max_volume / 100
         if abs(current - target) < 0.0001:
             return
         await self._rest.set_number(
-            self._settings.volume_cap_number_entity, target,
+            self._hardware.volume_cap_number_entity, target,
         )
 
     async def _sync_led_theme(
@@ -417,7 +444,7 @@ class HardwareIntentProcessor:
             or attributes.get("mode") != "text"
         ):
             raise ValueError("Voice LED theme text contract is invalid")
-        target = self._settings.led_theme.payload
+        target = self._hardware.led_theme.payload
         if state == target:
             self._theme_sync_pending = False
             return
@@ -425,7 +452,7 @@ class HardwareIntentProcessor:
             return
         try:
             await self._rest.set_text(
-                self._settings.led_theme_text_entity, target,
+                self._hardware.led_theme_text_entity, target,
             )
         except (CoreActionError, OSError) as exc:
             logger.warning("Voice LED theme synchronization failed: %s", exc)
@@ -435,54 +462,55 @@ class HardwareIntentProcessor:
     async def _apply_gesture(self, event_type: str) -> None:
         if event_type not in ("single_press", "double_press", "triple_press"):
             return
-        state = await asyncio.to_thread(self._controller.state)
         if (
             self._assist_priority
-            or not self._output_available
-            or state.get("stop_pending") is True
-            or state.get("error") is not None
-            or state.get("playback") not in ("playing", "paused")
-            or state.get("owns_transport") is not True
+            or not self._playback_available
+            or self._playback_state not in ("playing", "paused")
         ):
             return
         try:
             if event_type == "single_press":
-                await asyncio.to_thread(self._controller.toggle_pause)
+                await self._rest.control_player(
+                    self._settings.music_assistant_player_entity,
+                    "media_play_pause",
+                )
             elif event_type == "double_press":
-                await asyncio.to_thread(self._controller.skip, "next")
+                await self._rest.control_player(
+                    self._settings.music_assistant_player_entity,
+                    "media_next_track",
+                )
+            elif (self._estimated_position() or 0.0) > 10.0:
+                await self._rest.control_player(
+                    self._settings.music_assistant_player_entity,
+                    "media_seek",
+                    seek_position=0.0,
+                )
             else:
-                position = state.get("position")
-                if isinstance(position, (int, float)) and position > 10:
-                    await asyncio.to_thread(self._controller.restart_current)
-                else:
-                    await asyncio.to_thread(self._controller.skip, "previous")
-        except (ControlError, PlayerError, StateError) as exc:
+                await self._rest.control_player(
+                    self._settings.music_assistant_player_entity,
+                    "media_previous_track",
+                )
+        except (CoreActionError, OSError) as exc:
             logger.warning("Voice hardware gesture was rejected: %s", exc)
 
     async def _reconcile_led(self) -> None:
-        state = await asyncio.to_thread(self._controller.state)
-        if (
-            self._assist_priority
-            or self._local_led_priority
-            or state.get("error") is not None
-            or state.get("playback") == "error"
-        ):
+        if self._assist_priority or self._local_led_priority:
             self._led_needs_reapply = True
             return
-        if not self._output_available:
+        if not self._voice_available:
             display = "off"
-        elif state.get("playback") == "paused":
+        elif self._playback_state == "paused":
             display = "paused"
-        elif state.get("playback") in ("playing", "buffering"):
+        elif self._playback_state in ("playing", "buffering"):
             display = "playing"
         else:
             display = "sleeping"
         if display == self._last_led_display and not self._led_needs_reapply:
             return
-        if self._settings.led_light_entity:
-            await self._rest.set_light(self._settings.led_light_entity, display)
+        if self._hardware.led_light_entity:
+            await self._rest.set_light(self._hardware.led_light_entity, display)
         else:
-            await self._rest.set_select(self._settings.led_select_entity, display)
+            await self._rest.set_select(self._hardware.led_select_entity, display)
         self._last_led_display = display
         self._led_needs_reapply = False
 
@@ -492,60 +520,45 @@ class HardwareIntentProcessor:
         display = self._last_led_display
         if display is None:
             return False
-        if self._settings.led_select_entity:
+        if self._hardware.led_select_entity:
             return state == display
         if display == "off":
             return state == "off"
-        styles = {
-            "playing": ([0, 96, 255], 64),
-            "paused": ([255, 128, 0], 48),
-            "sleeping": ([32, 8, 0], 8),
-        }
-        expected = styles.get(display)
-        if expected is None or state != "on":
+        try:
+            style = self._hardware.led_theme.display_style(display)
+        except ValueError:
             return False
         color = attributes.get("rgb_color")
         brightness = attributes.get("brightness")
-        if not isinstance(color, (list, tuple)):
-            return False
-        return list(color) == expected[0] and brightness == expected[1]
+        return (
+            state == "on"
+            and isinstance(color, (list, tuple))
+            and list(color) == style.rgb_color
+            and brightness == style.ha_brightness
+        )
 
 
 class CoreHardwareBridge:
     def __init__(
         self,
-        settings: HardwareBridgeSettings,
-        voice_entity: str,
-        controller: PlaybackController,
+        settings: Settings,
         *,
         token: str,
         rest: RestActions | None = None,
-        connector: Callable[[], AsyncContextManager[WebSocketConnection]] | None = None,
+        connector: (
+            Callable[[], AbstractAsyncContextManager[WebSocketConnection]] | None
+        ) = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        if not settings.enabled:
-            raise ValueError(settings.disabled_reason or "Hardware bridge is disabled")
         self._settings = settings
-        self._voice_entity = voice_entity
         self._token = token
-        self._rest = rest or CoreRestActions(
-            token,
-            voice_entity=voice_entity,
-            light_entity=settings.led_light_entity,
-            select_entity=settings.led_select_entity,
-            text_entity=settings.led_theme_text_entity,
-            theme_payload=settings.led_theme.payload,
-            number_entity=settings.volume_cap_number_entity,
-        )
-        self._processor = HardwareIntentProcessor(
-            settings, voice_entity, controller, self._rest,
-        )
+        self._rest = rest or CoreRestActions(token, settings)
+        self._processor = HardwareIntentProcessor(settings, self._rest)
         self._connector = connector or self._default_connector
         self._sleep = sleep
         self._task: asyncio.Task[None] | None = None
         self._lock = RLock()
         self._status: dict[str, object] = {
-            "enabled": True,
             "running": False,
             "connected": False,
             "reconnect_failures": 0,
@@ -553,20 +566,15 @@ class CoreHardwareBridge:
         }
 
     @classmethod
-    def from_env(
-        cls,
-        settings: HardwareBridgeSettings,
-        voice_entity: str,
-        controller: PlaybackController,
-    ) -> CoreHardwareBridge:
+    def from_env(cls, settings: Settings) -> CoreHardwareBridge:
         return cls(
             settings,
-            voice_entity,
-            controller,
             token=os.environ.get("SUPERVISOR_TOKEN", ""),
         )
 
-    def _default_connector(self) -> AsyncContextManager[WebSocketConnection]:
+    def _default_connector(
+        self,
+    ) -> AbstractAsyncContextManager[WebSocketConnection]:
         return connect(
             _CORE_WS,
             open_timeout=5,
@@ -604,9 +612,6 @@ class CoreHardwareBridge:
             except (
                 BridgeProtocolError,
                 CoreActionError,
-                ControlError,
-                PlayerError,
-                StateError,
                 ConnectionClosed,
                 WebSocketException,
                 OSError,
@@ -634,9 +639,6 @@ class CoreHardwareBridge:
                 except (
                     BridgeProtocolError,
                     CoreActionError,
-                    ControlError,
-                    PlayerError,
-                    StateError,
                     ConnectionClosed,
                     WebSocketException,
                     OSError,
@@ -681,20 +683,6 @@ class CoreHardwareBridge:
 
             command_id = 0
             pending_events: list[dict[str, object]] = []
-            command_id += 1
-            current_user = await self._request(
-                websocket,
-                {"id": command_id, "type": "auth/current_user"},
-                pending_events=pending_events,
-            )
-            own_user_id = (
-                current_user.get("id")
-                if isinstance(current_user, dict) else None
-            )
-            if not isinstance(own_user_id, str) or not own_user_id:
-                raise BridgeProtocolError(
-                    "Core WebSocket returned an invalid authenticated user",
-                )
             for entity_id in self._processor.entities:
                 command_id += 1
                 await self._request(
@@ -710,23 +698,6 @@ class CoreHardwareBridge:
                     pending_events=pending_events,
                 )
             command_id += 1
-            await self._request(
-                websocket,
-                {
-                    "id": command_id,
-                    "type": "subscribe_trigger",
-                    "trigger": {
-                        "platform": "event",
-                        "event_type": "call_service",
-                        "event_data": {
-                            "domain": "media_player",
-                            "service": "play_media",
-                        },
-                    },
-                },
-                pending_events=pending_events,
-            )
-            command_id += 1
             snapshot = await self._request(
                 websocket,
                 {"id": command_id, "type": "get_states"},
@@ -736,7 +707,7 @@ class CoreHardwareBridge:
                 raise BridgeProtocolError("Core WebSocket returned an invalid snapshot")
             await self._processor.reconcile_snapshot(snapshot)
             for message in pending_events:
-                await self._process_event(message, own_user_id)
+                await self._process_event(message)
             self._set_status(
                 connected=True, reconnect_failures=0, error=None,
             )
@@ -744,25 +715,11 @@ class CoreHardwareBridge:
 
             async for raw in websocket:
                 message = self._decode(raw)
-                if message.get("type") != "event":
-                    continue
-                await self._process_event(message, own_user_id)
+                if message.get("type") == "event":
+                    await self._process_event(message)
         self._set_status(connected=False)
 
-    async def _process_event(
-        self,
-        message: dict[str, object],
-        own_user_id: str,
-    ) -> None:
-        play_media_call = self._event_play_media_call(message)
-        if play_media_call is not None:
-            await self._processor.process_play_media_call(
-                play_media_call["service_data"],
-                user_id=play_media_call["user_id"],
-                own_user_id=own_user_id,
-                event_key=play_media_call["event_key"],
-            )
-            return
+    async def _process_event(self, message: dict[str, object]) -> None:
         state = self._event_state(message)
         if state is None:
             return
@@ -837,56 +794,4 @@ class CoreHardwareBridge:
             "state": state,
             "attributes": attributes,
             "event_key": context_id or to_state.get("last_updated"),
-        }
-
-    @staticmethod
-    def _event_play_media_call(
-        message: dict[str, object],
-    ) -> dict[str, object] | None:
-        event = message.get("event")
-        if not isinstance(event, dict):
-            return None
-        variables = event.get("variables")
-        trigger = variables.get("trigger") if isinstance(variables, dict) else None
-        service_event = trigger.get("event") if isinstance(trigger, dict) else None
-        if (
-            not isinstance(service_event, dict)
-            or service_event.get("event_type") != "call_service"
-        ):
-            return None
-        data = service_event.get("data")
-        if (
-            not isinstance(data, dict)
-            or data.get("domain") != "media_player"
-            or data.get("service") != "play_media"
-            or not isinstance(data.get("service_data"), dict)
-        ):
-            return None
-        context = service_event.get("context")
-        user_id = context.get("user_id") if isinstance(context, dict) else None
-        context_id = context.get("id") if isinstance(context, dict) else None
-        return {
-            "service_data": data["service_data"],
-            "user_id": user_id,
-            "event_key": context_id or service_event.get("time_fired"),
-        }
-
-
-class DisabledHardwareBridge:
-    def __init__(self, reason: str) -> None:
-        self._reason = reason
-
-    async def start(self) -> None:
-        return None
-
-    async def close(self) -> None:
-        return None
-
-    def status(self) -> dict[str, object]:
-        return {
-            "enabled": False,
-            "running": False,
-            "connected": False,
-            "reconnect_failures": 0,
-            "error": self._reason,
         }

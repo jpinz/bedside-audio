@@ -2,9 +2,10 @@
 
 This directory contains a standalone custom firmware configuration for the
 standard 16 MB Home Assistant Voice Preview Edition. It is a thin hardware
-adapter for Bedside Audio v0.8. `PlaybackController` remains authoritative for
-the queue, timers, provenance, the 10-second previous-or-restart rule, and
-transport policy.
+adapter for the Bedside hardware App. Music Assistant remains authoritative
+for the queue, playback history, seeking, and transport policy. The App maps
+the firmware events to the configured Music Assistant player and applies the
+10-second previous-or-restart rule.
 
 ## Source and licensing
 
@@ -38,8 +39,8 @@ The firmware exposes:
   carrying the playing, paused, sleeping, and shared button-press color and
   brightness styles.
 
-Configure the event and select entities through the existing Bedside hardware
-bridge options. Configure the number entity through
+Configure the event and select entities through the Bedside hardware App
+options. Configure the number entity through
 `voice_volume_cap_number_entity`; the app then synchronizes the number to its
 `max_volume` option. Leaving that option blank preserves earlier behavior and
 the firmware keeps its safe 50 percent default.
@@ -69,7 +70,7 @@ behavior.
 Normal unheld dial steps use `media_player.volume_set` and clamp immediately
 to `0.0..bedside_volume_cap`. The official held-button group-volume or hue
 gesture, transient volume display, one-second timing, and encoder reset remain.
-Bedside still observes volume and may correct external calls.
+The App still observes the native Voice volume and may correct external calls.
 
 Bedside LED effects use all 12 internal pixels:
 
@@ -85,10 +86,9 @@ separate single, double, or triple gesture feedback.
 They run only at the final normal-idle tier. Voice-kit startup failure,
 provisioning/startup, no HA connection, button, jack, dial, ringing timer,
 Assist phases/errors, Voice timer progress, mute, and zero volume all take
-priority. The diagnostic LED Ring can affect official idle display only; it
-cannot supersede those states or an active Bedside display. Bedside sleep
-timers do not create a firmware state, so playing or paused remains the base
-intent until the app reports stopped or idle as `sleeping`.
+priority. The diagnostic LED Ring can affect official idle display only; it cannot
+supersede those states or an active Bedside display. Music Assistant playback
+state determines whether the base intent is playing, paused, or sleeping.
 
 Initial publication of the Bedside number and select routes through one
 restart-mode deferred refresh. This coalesces their setup callbacks, waits
@@ -97,11 +97,10 @@ intent without changing the LED priority reducer. The restored theme is
 strictly parsed before that render; the text entity publishes only the valid
 stored or default payload.
 
-For upgrades, update the App to `0.8.0` with the theme entity blank, install
+For upgrades, update the App with the theme entity blank, install
 firmware `26.9.0-bedside.5` through the separately approved operator process,
 confirm the exact new `text.*` entity ID in Home Assistant, then add that ID to
-the App options. Firmware-first upgrades are also safe because earlier App
-versions ignore the text entity.
+the App options.
 
 ## First-flash provisioning
 

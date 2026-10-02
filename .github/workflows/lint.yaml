@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   lint:
-    name: Lint Bedside Audio
+    name: Lint Bedside Hardware
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
